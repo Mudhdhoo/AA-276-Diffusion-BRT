@@ -6,6 +6,9 @@ from abc import ABC, abstractmethod
 import numpy as np  # Only for plotting
 import sys
 import os
+import csv
+from datetime import datetime
+import time
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils.value_visualization import plot_3d_value_evolution
 
@@ -299,38 +302,96 @@ def get_V(env, dynamics, grid, times, convergence_threshold=1e-3, max_time=-20):
     return values, True
 
 
-def main():
-    key = jax.random.PRNGKey(42)
-    
-    env = AirplaneObstacleEnvironment()
-    env.set_random_obstacles(3, key=key)
+def get_timestamp_dir():
+    """Create a directory name based on current timestamp."""
+    return datetime.now().strftime("%d_%b_%Y_%H_%M")
+
+def save_environment_plot(env, save_path):
+    """Save a plot of the environment with signed distances."""
     fig, ax = plt.subplots()
     plot_signed_distances(ax, env)
     plot_environment(ax, env)
-    #plt.show()
+    plt.savefig(save_path)
+    plt.close()
 
-    grid = hj.Grid.from_lattice_parameters_and_boundary_conditions(
-        domain=hj.sets.Box(
-            jnp.array([0.0, 0.0, -jnp.pi]),
-            jnp.array([env.width, env.height, jnp.pi])
-        ),  
-        shape=(N_POINTS, N_POINTS, N_POINTS)
-    )
-    initial_times = jnp.linspace(0, T, N_POINTS)  # This is correct as T is already negative
-    dynamics = AirplaneDynamics()
-    V, converged = get_V(env, dynamics, grid, initial_times)
+def main():
+    # Create output directory with timestamp
+    output_dir = os.path.join('outputs', get_timestamp_dir())
+    os.makedirs(output_dir, exist_ok=True)
     
-    if not converged or V is None:
-        print("Value function did not converge. Not plotting.")
-        return
+    # Create CSV file for logging
+    csv_path = os.path.join(output_dir, 'results.csv')
+    with open(csv_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['sample_id', 'seed', 'converged', 'convergence_time', 'timestamp'])
     
-    # Create time points based on the shape of V
-    times = jnp.linspace(0, V.shape[0] * T / N_POINTS, V.shape[0])  # Go from 0 to negative time
+    # Initialize global key
+    global_key = jax.random.PRNGKey(42)  # Fixed seed for reproducibility
     
-    plot_3d_value_evolution(V, grid, times, save_path='outputs/3d_value_evolution.gif',
-                          level=0.0, opacity=0.3,
-                          elev=30, azim=45, interval=200, max_frames=20)
-
+    # Process 300 different environments
+    for sample_id in range(300):
+        print(f"\nProcessing sample {sample_id + 1}/300")
+        
+        # Create sample directory
+        sample_dir = os.path.join(output_dir, f'sample_{sample_id:03d}')
+        os.makedirs(sample_dir, exist_ok=True)
+        
+        # Get new subkey for this sample
+        global_key, subkey = jax.random.split(global_key)
+        
+        # Create and setup environment
+        env = AirplaneObstacleEnvironment()
+        env.set_random_obstacles(3, key=subkey)
+        
+        # Save environment plot
+        save_environment_plot(env, os.path.join(sample_dir, 'environment.png'))
+        
+        # Setup grid and dynamics
+        grid = hj.Grid.from_lattice_parameters_and_boundary_conditions(
+            domain=hj.sets.Box(
+                jnp.array([0.0, 0.0, -jnp.pi]),
+                jnp.array([env.width, env.height, jnp.pi])
+            ),  
+            shape=(N_POINTS, N_POINTS, N_POINTS)
+        )
+        initial_times = jnp.linspace(0, T, N_POINTS)
+        dynamics = AirplaneDynamics()
+        
+        # Compute value function and measure time
+        start_time = time.time()
+        V, converged = get_V(env, dynamics, grid, initial_times)
+        convergence_time = time.time() - start_time
+        
+        # Save results to CSV
+        with open(csv_path, 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                sample_id,
+                int(jax.random.fold_in(subkey, 0)),  # Convert subkey to integer for logging
+                converged,
+                convergence_time,
+                datetime.now().isoformat()
+            ])
+        
+        if not converged or V is None:
+            print(f"Sample {sample_id} did not converge. Skipping value function visualization.")
+            continue
+        
+        # Create time points based on the shape of V
+        times = jnp.linspace(0, V.shape[0] * T / N_POINTS, V.shape[0])
+        
+        # Save value function visualization
+        plot_3d_value_evolution(
+            V, grid, times,
+            save_path=os.path.join(sample_dir, 'value_evolution.gif'),
+            level=0.0, opacity=0.3,
+            elev=30, azim=45, interval=200, max_frames=20
+        )
+        
+        # Save value function data
+        np.save(os.path.join(sample_dir, 'value_function.npy'), V)
+        
+        print(f"Completed sample {sample_id + 1}")
 
 if __name__ == "__main__":
     main()
