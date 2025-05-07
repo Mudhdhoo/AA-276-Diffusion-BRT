@@ -57,7 +57,7 @@ class RectangleObstacle(Obstacle):
         # For points inside the rectangle, compute negative distance to nearest boundary
         inside_dx = jnp.minimum(X - self.x1, self.x2 - X)
         inside_dy = jnp.minimum(Y - self.y1, self.y2 - Y)
-        inside_dist = -jnp.minimum(jnp.minimum(inside_dx, inside_dy), 0.0)
+        inside_dist = -jnp.minimum(inside_dx, inside_dy)
         
         # Determine which points are inside the rectangle
         is_inside = ((self.x1 <= X) & (X <= self.x2) & 
@@ -67,7 +67,8 @@ class RectangleObstacle(Obstacle):
     
     def plot(self, ax):
         """Plot the obstacle."""
-        rect = plt.Rectangle((self.x1, self.y1), self.x2 - self.x1, self.y2 - self.y1, facecolor='red', alpha=0.5)
+        rect = plt.Rectangle((self.x1, self.y1), self.x2 - self.x1, self.y2 - self.y1, 
+                             edgecolor='black', facecolor='none')
         ax.add_patch(rect)
         
 
@@ -76,6 +77,8 @@ class AirplaneDynamics(hj.dynamics.ControlAndDisturbanceAffineDynamics):
     def __init__(self, v0=0.4):
         super().__init__(control_mode='max', disturbance_mode='min')
         self.v0 = v0
+        self.control_space = hj.sets.Box(jnp.array([0.2, -0.5]), jnp.array([0.6, 0.5]))
+        self.disturbance_space = hj.sets.Box(jnp.array([0.0]), jnp.array([0.0]))
     
     def open_loop_dynamics(self, state, time):
         """Open loop dynamics of the airplane."""
@@ -101,11 +104,11 @@ class AirplaneDynamics(hj.dynamics.ControlAndDisturbanceAffineDynamics):
     
     def control_space(self):
         """Control space of the airplane."""
-        return hj.sets.Box(jnp.array([0.2, -0.5]), jnp.array([0.6, 0.5]))
+        return self.control_space
 
     def disturbance_space(self):
         """Disturbance space of the airplane."""
-        return hj.sets.Box(jnp.array([0.0]), jnp.array([0.0]))
+        return self.disturbance_space
         
 
 class AirplaneObstacleEnvironment():
@@ -194,10 +197,16 @@ def plot_signed_distances(ax, env):
     Y_np = np.array(Y)
     signed_distances_np = np.array(signed_distances)
     
-    levels = np.linspace(-2, 2, 50)
-    cmap = plt.cm.RdYlGn
+    # Create a custom colormap that makes red start at 0
+    from matplotlib.colors import LinearSegmentedColormap
+    colors = [(0.0, 'red'), (0.5, 'white'), (1.0, 'green')]  # Red to white to green
+    cmap = LinearSegmentedColormap.from_list('custom_rdylgn', colors)
     
-    contour = ax.contourf(X_np, Y_np, signed_distances_np, levels=levels, cmap=cmap, extend='both')
+    # Set levels to have more resolution around 0
+    levels = np.linspace(-2, 2, 100)
+    
+    # Plot with the new colormap and normalization
+    contour = ax.contourf(X_np, Y_np, signed_distances_np, levels=levels, cmap=cmap, norm=plt.Normalize(-2, 2), extend='both')
     ax.contour(X_np, Y_np, signed_distances_np, levels=[0], colors='k', linewidths=2)
     
     ax.set_xlim(0, env.width)
