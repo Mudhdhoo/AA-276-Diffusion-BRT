@@ -4,6 +4,13 @@ import hj_reachability as hj
 import matplotlib.pyplot as plt
 from abc import ABC, abstractmethod
 import numpy as np  # Only for plotting
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from utils.value_visualization import plot_3d_value_evolution
+
+N_POINTS = 101
+T = -5
 
 class Obstacle(ABC):
     """ Abstract base class for obstacles. """
@@ -75,10 +82,15 @@ class RectangleObstacle(Obstacle):
 class AirplaneDynamics(hj.dynamics.ControlAndDisturbanceAffineDynamics):
     """ Airplane dynamics with control and disturbance. """
     def __init__(self, v0=0.4):
-        super().__init__(control_mode='max', disturbance_mode='min')
         self.v0 = v0
         self.control_space = hj.sets.Box(jnp.array([0.2, -0.5]), jnp.array([0.6, 0.5]))
         self.disturbance_space = hj.sets.Box(jnp.array([0.0]), jnp.array([0.0]))
+        super().__init__(
+            control_space=self.control_space, 
+            disturbance_space=self.disturbance_space, 
+            control_mode='max', 
+            disturbance_mode='min'
+        )
     
     def open_loop_dynamics(self, state, time):
         """Open loop dynamics of the airplane."""
@@ -100,7 +112,7 @@ class AirplaneDynamics(hj.dynamics.ControlAndDisturbanceAffineDynamics):
     
     def disturbance_jacobian(self, state, time):
         """Disturbance Jacobian of the airplane."""
-        return jnp.zeros((3, 0))
+        return jnp.zeros((3, 1))
     
     def control_space(self):
         """Control space of the airplane."""
@@ -109,7 +121,7 @@ class AirplaneDynamics(hj.dynamics.ControlAndDisturbanceAffineDynamics):
     def disturbance_space(self):
         """Disturbance space of the airplane."""
         return self.disturbance_space
-        
+            
 
 class AirplaneObstacleEnvironment():
     def __init__(self, width=10, height=10, obstacles=None):
@@ -124,7 +136,7 @@ class AirplaneObstacleEnvironment():
         
         # Define min and max sizes relative to environment
         min_size = 0.05 * min(self.width, self.height)
-        max_size = 0.2 * min(self.width, self.height)
+        max_size = 0.15 * min(self.width, self.height)
         
         while len(self.obstacles) < num_obstacles:
             # Generate new keys for this obstacle
@@ -185,8 +197,8 @@ def plot_environment(ax, env):
 
 def plot_signed_distances(ax, env):
     # Convert to numpy arrays for plotting
-    x = jnp.linspace(0, env.width, 1000)
-    y = jnp.linspace(0, env.height, 1000)
+    x = jnp.linspace(0, env.width, N_POINTS)
+    y = jnp.linspace(0, env.height, N_POINTS)
     X, Y = jnp.meshgrid(x, y)
     
     # Get signed distances from the environment
@@ -199,7 +211,14 @@ def plot_signed_distances(ax, env):
     
     # Create a custom colormap that makes red start at 0
     from matplotlib.colors import LinearSegmentedColormap
-    colors = [(0.0, 'red'), (0.5, 'white'), (1.0, 'green')]  # Red to white to green
+    colors = [
+        (0.0, 'red'),      # Most negative (darkest red)
+        (0.4, 'lightcoral'),  # Less negative (lighter red)
+        (0.499, 'mistyrose'),  # Just negative (lightest red)
+        (0.501, 'honeydew'),   # Just positive (lightest green)
+        (0.6, 'lightgreen'),   # Less positive (lighter green)
+        (1.0, 'darkgreen')     # Most positive (darkest green)
+    ]
     cmap = LinearSegmentedColormap.from_list('custom_rdylgn', colors)
     
     # Set levels to have more resolution around 0
@@ -214,20 +233,103 @@ def plot_signed_distances(ax, env):
     ax.set_aspect('equal')
     
     cbar = plt.colorbar(contour, ax=ax)
-    cbar.set_label('Safety function l(x)')
+    cbar.set_label('Signed Distance to Obstacle l(X)')
     cbar.ax.axhline(0, color='black', linewidth=2)
+
+
+def get_V(env, dynamics, grid, times, convergence_threshold=1e-3, max_time=-20):
+    """
+    Compute the value function with convergence checking.
+    
+    Args:
+        env: Environment object
+        dynamics: Dynamics object
+        grid: Grid object
+        times: Initial time points
+        convergence_threshold: Maximum allowed change in value function between consecutive time steps
+        max_time: Maximum time horizon to try before giving up
+        
+    Returns:
+        values: Value function array with shape [time, x, y, theta]
+        converged: Boolean indicating if convergence was achieved
+    """
+    # Extract x, y coordinates from the grid states
+    x = grid.states[..., 0]
+    y = grid.states[..., 1]
+    
+    # Get signed distances for the x, y coordinates
+    failure_set = env.get_signed_distances(x, y)
+
+    solver_settings = hj.SolverSettings.with_accuracy(
+        'very_high',
+        hamiltonian_postprocessor=hj.solver.backwards_reachable_tube
+    )
+    
+    current_times = times
+    values = None
+    converged = False
+    
+    while not converged and current_times[-1] > max_time:  # Check the last time point
+        # Solve for current time horizon
+        values = hj.solve(solver_settings, dynamics, grid, current_times, failure_set)
+        values = np.array(values)  # Convert to numpy array
+        
+        # Check convergence by comparing only the last two time steps
+        max_change = np.max(np.abs(values[-1] - values[-2]))
+        
+        if max_change < convergence_threshold:
+            converged = True
+            print(f"Converged with max change: {max_change:.2e}")
+        else:
+            # Extend time horizon by doubling it and double the number of points
+            new_end_time = current_times[-1] * 2  # Double the end time (more negative)
+            new_num_points = len(current_times) * 2  # Double the number of points
+            new_times = jnp.linspace(0, new_end_time, new_num_points)  # Go from 0 to negative time
+            current_times = new_times
+            print(f"Not converged. Max change: {max_change:.2e}. Extending time horizon to {current_times[-1]:.1f} with {len(current_times)} points")
+    
+    if not converged:
+        print(f"Warning: Value function did not converge within time horizon {max_time}")
+        return None, False
+    
+    # Ensure values has the correct shape [time, x, y, theta]
+    if values.ndim != 4:
+        raise ValueError(f"Expected 4D array from hj.solve, got shape {values.shape}")
+    
+    return values, True
 
 
 def main():
     key = jax.random.PRNGKey(42)
     
     env = AirplaneObstacleEnvironment()
-    env.set_random_obstacles(5, key=key)
+    env.set_random_obstacles(3, key=key)
     fig, ax = plt.subplots()
     plot_signed_distances(ax, env)
     plot_environment(ax, env)
-    plt.show()
+    #plt.show()
 
+    grid = hj.Grid.from_lattice_parameters_and_boundary_conditions(
+        domain=hj.sets.Box(
+            jnp.array([0.0, 0.0, -jnp.pi]),
+            jnp.array([env.width, env.height, jnp.pi])
+        ),  
+        shape=(N_POINTS, N_POINTS, N_POINTS)
+    )
+    initial_times = jnp.linspace(0, T, N_POINTS)  # This is correct as T is already negative
+    dynamics = AirplaneDynamics()
+    V, converged = get_V(env, dynamics, grid, initial_times)
+    
+    if not converged or V is None:
+        print("Value function did not converge. Not plotting.")
+        return
+    
+    # Create time points based on the shape of V
+    times = jnp.linspace(0, V.shape[0] * T / N_POINTS, V.shape[0])  # Go from 0 to negative time
+    
+    plot_3d_value_evolution(V, grid, times, save_path='outputs/3d_value_evolution.gif',
+                          level=0.0, opacity=0.3,
+                          elev=30, azim=45, interval=200, max_frames=20)
 
 
 if __name__ == "__main__":
