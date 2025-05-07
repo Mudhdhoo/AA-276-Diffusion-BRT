@@ -1,15 +1,23 @@
 import jax
 import jax.numpy as jnp
-import numpy as np
 import hj_reachability as hj
 import matplotlib.pyplot as plt
 from abc import ABC, abstractmethod
+import numpy as np  # Only for plotting
 
 class Obstacle(ABC):
     """ Abstract base class for obstacles. """
     @abstractmethod
-    def get_distance(self, x: float, y: float) -> float:
-        """Get the signed distance to the closest point on the obstacle."""
+    def get_distance(self, X, Y):
+        """Get the signed distance to the closest point on the obstacle.
+        
+        Args:
+            X: x-coordinate(s), can be scalar or array-like
+            Y: y-coordinate(s), must match shape of X
+            
+        Returns:
+            Signed distance(s) with same shape as X and Y
+        """
         pass
 
     @abstractmethod
@@ -27,15 +35,34 @@ class RectangleObstacle(Obstacle):
         self.y2 = max(y1, y2)
         
     
-    def get_distance(self, x: float, y: float) -> float:
-        """Get the signed distance to the closest point on the rectangle."""
-        dx = jnp.maximum(jnp.maximum(self.x1 - x, 0.0), x - self.x2)
-        dy = jnp.maximum(jnp.maximum(self.y1 - y, 0.0), y - self.y2)
-        outside_dist = jnp.hypot(dx, dy)
-        inside_dx = jnp.minimum(x - self.x1, self.x2 - x)
-        inside_dy = jnp.minimum(y - self.y1, self.y2 - y)
-        inside_dist = -jnp.minimum(inside_dx, inside_dy)
-        is_inside = (self.x1 <= x) & (x <= self.x2) & (self.y1 <= y) & (y <= self.y2)
+    def get_distance(self, X, Y):
+        """Get the signed distance to the closest point on the rectangle.
+        
+        Args:
+            X: x-coordinate(s), can be scalar or array-like
+            Y: y-coordinate(s), must match shape of X
+            
+        Returns:
+            Signed distance(s) to the rectangle. Negative values indicate points inside the rectangle.
+        """
+        # Convert inputs to JAX arrays
+        X = jnp.asarray(X)
+        Y = jnp.asarray(Y)
+        
+        # Calculate distance to closest point on rectangle boundary
+        dx = jnp.maximum(jnp.maximum(self.x1 - X, X - self.x2), 0.0)
+        dy = jnp.maximum(jnp.maximum(self.y1 - Y, Y - self.y2), 0.0)
+        outside_dist = jnp.sqrt(dx**2 + dy**2)
+        
+        # For points inside the rectangle, compute negative distance to nearest boundary
+        inside_dx = jnp.minimum(X - self.x1, self.x2 - X)
+        inside_dy = jnp.minimum(Y - self.y1, self.y2 - Y)
+        inside_dist = -jnp.minimum(jnp.minimum(inside_dx, inside_dy), 0.0)
+        
+        # Determine which points are inside the rectangle
+        is_inside = ((self.x1 <= X) & (X <= self.x2) & 
+                    (self.y1 <= Y) & (Y <= self.y2))
+        
         return jnp.where(is_inside, inside_dist, outside_dist)
     
     def plot(self, ax):
@@ -87,33 +114,110 @@ class AirplaneObstacleEnvironment():
         self.height = height
         self.obstacles = obstacles if obstacles is not None else []
 
-    def set_random_obstacles(self, num_obstacles=1):
+    def set_random_obstacles(self, num_obstacles=1, key=None):
         self.obstacles = []
-        for _ in range(num_obstacles):
-            max_width = min(self.width, self.height) * 0.1
-            max_height = max_width
-            x1 = np.random.uniform(0, self.width - max_width)
-            y1 = np.random.uniform(0, self.height - max_height)
-            x2 = x1 + max_width
-            y2 = y1 + max_height
+        if key is None:
+            key = jax.random.PRNGKey(0)
+        
+        # Define min and max sizes relative to environment
+        min_size = 0.05 * min(self.width, self.height)
+        max_size = 0.2 * min(self.width, self.height)
+        
+        while len(self.obstacles) < num_obstacles:
+            # Generate new keys for this obstacle
+            key, *subkeys = jax.random.split(key, 5)
+            
+            # Randomize width and height independently
+            width = jax.random.uniform(subkeys[0], minval=min_size, maxval=max_size)
+            height = jax.random.uniform(subkeys[1], minval=min_size, maxval=max_size)
+            
+            # Ensure the obstacle fits within the environment
+            max_x = self.width - width
+            max_y = self.height - height
+            
+            if max_x <= 0 or max_y <= 0:
+                continue  # Skip if the obstacle is too large for the environment
+                
+            # Randomize position
+            x1 = float(jax.random.uniform(subkeys[2], minval=0, maxval=max_x))
+            y1 = float(jax.random.uniform(subkeys[3], minval=0, maxval=max_y))
+            
+            x2 = x1 + width
+            y2 = y1 + height
+            
+            # Create and add the obstacle
             self.obstacles.append(RectangleObstacle(x1, y1, x2, y2))
+    
+    def get_signed_distances(self, X, Y):
+        """
+        Calculate signed distances for given grid points.
+        
+        Args:
+            X: 2D array of x-coordinates
+            Y: 2D array of y-coordinates (same shape as X)
+            
+        Returns:
+            2D array of signed distances where:
+            - Positive values: distance to nearest obstacle (outside)
+            - Negative values: distance to nearest boundary (inside)
+            - Zero: on obstacle boundary
+        """
+        if not self.obstacles:
+            return jnp.full_like(X, jnp.inf)
+            
+        # Calculate distances to all obstacles
+        all_distances = jnp.stack([obs.get_distance(X, Y) for obs in self.obstacles])
+        
+        # Find minimum distance at each point
+        return jnp.min(all_distances, axis=0)
 
 
 #########################################################################
-def plot_environment(env):
-    fig, ax = plt.subplots()
+def plot_environment(ax, env):
     for obs in env.obstacles:
         obs.plot(ax)
     ax.set_xlim(0, env.width)
     ax.set_ylim(0, env.height)
     ax.set_aspect('equal')
-    plt.show()
+
+def plot_signed_distances(ax, env):
+    # Convert to numpy arrays for plotting
+    x = jnp.linspace(0, env.width, 1000)
+    y = jnp.linspace(0, env.height, 1000)
+    X, Y = jnp.meshgrid(x, y)
+    
+    # Get signed distances from the environment
+    signed_distances = env.get_signed_distances(X, Y)
+    
+    # Convert to numpy for plotting
+    X_np = np.array(X)
+    Y_np = np.array(Y)
+    signed_distances_np = np.array(signed_distances)
+    
+    levels = np.linspace(-2, 2, 50)
+    cmap = plt.cm.RdYlGn
+    
+    contour = ax.contourf(X_np, Y_np, signed_distances_np, levels=levels, cmap=cmap, extend='both')
+    ax.contour(X_np, Y_np, signed_distances_np, levels=[0], colors='k', linewidths=2)
+    
+    ax.set_xlim(0, env.width)
+    ax.set_ylim(0, env.height)
+    ax.set_aspect('equal')
+    
+    cbar = plt.colorbar(contour, ax=ax)
+    cbar.set_label('Safety function l(x)')
+    cbar.ax.axhline(0, color='black', linewidth=2)
 
 
 def main():
+    key = jax.random.PRNGKey(42)
+    
     env = AirplaneObstacleEnvironment()
-    env.set_random_obstacles(5)
-    plot_environment(env)
+    env.set_random_obstacles(5, key=key)
+    fig, ax = plt.subplots()
+    plot_signed_distances(ax, env)
+    plot_environment(ax, env)
+    plt.show()
 
 
 
