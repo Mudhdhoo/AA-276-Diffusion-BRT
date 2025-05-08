@@ -9,6 +9,8 @@ import os
 import csv
 from datetime import datetime
 import time
+import multiprocessing as mp
+from functools import partial
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils.value_visualization import plot_3d_value_evolution
 
@@ -86,7 +88,7 @@ class AirplaneDynamics(hj.dynamics.ControlAndDisturbanceAffineDynamics):
     """ Airplane dynamics with control and disturbance. """
     def __init__(self, v0=0.4):
         self.v0 = v0
-        self.control_space = hj.sets.Box(jnp.array([0.2, -0.5]), jnp.array([0.6, 0.5]))
+        self.control_space = hj.sets.Box(jnp.array([0.1, -0.5]), jnp.array([0.8, 0.5]))
         self.disturbance_space = hj.sets.Box(jnp.array([0.0]), jnp.array([0.0]))
         super().__init__(
             control_space=self.control_space, 
@@ -225,7 +227,7 @@ def plot_signed_distances(ax, env):
     cmap = LinearSegmentedColormap.from_list('custom_rdylgn', colors)
     
     # Set levels to have more resolution around 0
-    levels = np.linspace(-2, 2, 100)
+    levels = np.linspace(-2, 2, N_POINTS)
     
     # Plot with the new colormap and normalization
     contour = ax.contourf(X_np, Y_np, signed_distances_np, levels=levels, cmap=cmap, norm=plt.Normalize(-2, 2), extend='both')
@@ -240,7 +242,7 @@ def plot_signed_distances(ax, env):
     cbar.ax.axhline(0, color='black', linewidth=2)
 
 
-def get_V(env, dynamics, grid, times, convergence_threshold=1e-3, max_time=-20):
+def get_V(env, dynamics, grid, times, convergence_threshold=1e-3, max_time=-40):
     """
     Compute the value function with convergence checking.
     
@@ -314,6 +316,75 @@ def save_environment_plot(env, save_path):
     plt.savefig(save_path)
     plt.close()
 
+def process_sample(sample_id, output_dir, global_key):
+    """Process a single sample with given ID and key."""
+    print(f"\nProcessing sample {sample_id + 1}/300")
+    
+    # Create sample directory
+    sample_dir = os.path.join(output_dir, f'sample_{sample_id:03d}')
+    os.makedirs(sample_dir, exist_ok=True)
+    
+    # Get new subkey for this sample
+    global_key, subkey = jax.random.split(global_key)
+    
+    # Create and setup environment
+    env = AirplaneObstacleEnvironment()
+    env.set_random_obstacles(3, key=subkey)
+    
+    # Save environment plot
+    save_environment_plot(env, os.path.join(sample_dir, 'environment.png'))
+    
+    # Setup grid and dynamics
+    grid = hj.Grid.from_lattice_parameters_and_boundary_conditions(
+        domain=hj.sets.Box(
+            jnp.array([0.0, 0.0, -jnp.pi]),
+            jnp.array([env.width, env.height, jnp.pi])
+        ),  
+        shape=(N_POINTS, N_POINTS, N_POINTS)
+    )
+    initial_times = jnp.linspace(0, T, N_POINTS)
+    dynamics = AirplaneDynamics()
+    
+    # Compute value function and measure time
+    start_time = time.time()
+    V, converged = get_V(env, dynamics, grid, initial_times)
+    convergence_time = time.time() - start_time
+    
+    result = {
+        'sample_id': sample_id,
+        'seed': int(jax.random.fold_in(subkey, 0)[0]),
+        'converged': converged,
+        'convergence_time': convergence_time,
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    if not converged or V is None:
+        print(f"Sample {sample_id} did not converge. Skipping value function visualization.")
+        return result
+    
+    # Create time points based on the shape of V
+    # IS THIS WRONG?
+    times = jnp.linspace(0, V.shape[0] * T / N_POINTS, V.shape[0])
+    
+    # Save value function visualization
+    plot_3d_value_evolution(
+        V, grid, times,
+        save_path=os.path.join(sample_dir, 'value_evolution.gif'),
+        level=0.0, opacity=0.3,
+        elev=30, azim=45, interval=200, max_frames=20
+    )
+    
+    # Save value function data
+    np.save(os.path.join(sample_dir, 'value_function.npy'), V)
+    
+    print(f"Completed sample {sample_id + 1}")
+    return result
+
+def process_sample_wrapper(args):
+    """Wrapper function to handle the arguments correctly for multiprocessing."""
+    sample_id, key, output_dir = args
+    return process_sample(sample_id, output_dir, key)
+
 def main():
     # Create output directory with timestamp
     output_dir = os.path.join('outputs', get_timestamp_dir())
@@ -328,70 +399,33 @@ def main():
     # Initialize global key
     global_key = jax.random.PRNGKey(42)  # Fixed seed for reproducibility
     
-    # Process 300 different environments
-    for sample_id in range(300):
-        print(f"\nProcessing sample {sample_id + 1}/300")
-        
-        # Create sample directory
-        sample_dir = os.path.join(output_dir, f'sample_{sample_id:03d}')
-        os.makedirs(sample_dir, exist_ok=True)
-        
-        # Get new subkey for this sample
-        global_key, subkey = jax.random.split(global_key)
-        
-        # Create and setup environment
-        env = AirplaneObstacleEnvironment()
-        env.set_random_obstacles(3, key=subkey)
-        
-        # Save environment plot
-        save_environment_plot(env, os.path.join(sample_dir, 'environment.png'))
-        
-        # Setup grid and dynamics
-        grid = hj.Grid.from_lattice_parameters_and_boundary_conditions(
-            domain=hj.sets.Box(
-                jnp.array([0.0, 0.0, -jnp.pi]),
-                jnp.array([env.width, env.height, jnp.pi])
-            ),  
-            shape=(N_POINTS, N_POINTS, N_POINTS)
-        )
-        initial_times = jnp.linspace(0, T, N_POINTS)
-        dynamics = AirplaneDynamics()
-        
-        # Compute value function and measure time
-        start_time = time.time()
-        V, converged = get_V(env, dynamics, grid, initial_times)
-        convergence_time = time.time() - start_time
-        
-        # Save results to CSV
-        with open(csv_path, 'a', newline='') as f:
-            writer = csv.writer(f)
+    # Create a pool of workers
+    num_cores = mp.cpu_count()
+    print(f"Using {num_cores} CPU cores")
+    
+    # Create a list of keys for each sample
+    keys = []
+    current_key = global_key
+    for _ in range(300):
+        current_key, subkey = jax.random.split(current_key)
+        keys.append(subkey)
+    
+    # Process samples in parallel
+    with mp.Pool(num_cores) as pool:
+        args = [(i, key, output_dir) for i, key in enumerate(keys)]
+        results = pool.map(process_sample_wrapper, args)
+    
+    # Write all results to CSV
+    with open(csv_path, 'a', newline='') as f:
+        writer = csv.writer(f)
+        for result in results:
             writer.writerow([
-                sample_id,
-                int(jax.random.fold_in(subkey, 0)),  # Convert subkey to integer for logging
-                converged,
-                convergence_time,
-                datetime.now().isoformat()
+                result['sample_id'],
+                result['seed'],
+                result['converged'],
+                result['convergence_time'],
+                result['timestamp']
             ])
-        
-        if not converged or V is None:
-            print(f"Sample {sample_id} did not converge. Skipping value function visualization.")
-            continue
-        
-        # Create time points based on the shape of V
-        times = jnp.linspace(0, V.shape[0] * T / N_POINTS, V.shape[0])
-        
-        # Save value function visualization
-        plot_3d_value_evolution(
-            V, grid, times,
-            save_path=os.path.join(sample_dir, 'value_evolution.gif'),
-            level=0.0, opacity=0.3,
-            elev=30, azim=45, interval=200, max_frames=20
-        )
-        
-        # Save value function data
-        np.save(os.path.join(sample_dir, 'value_function.npy'), V)
-        
-        print(f"Completed sample {sample_id + 1}")
 
 if __name__ == "__main__":
     main()
