@@ -52,45 +52,86 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
             - converged: Boolean indicating if convergence was achieved
             - final_time: The final time horizon used (None if not converged)
     """
-    # Extract x, y coordinates from the grid states
-    x = grid.states[..., 0]
-    y = grid.states[..., 1]
-    
-    # Get signed distances for the x, y coordinates
-    failure_set = env.get_signed_distances(x, y)
+    try:
+        print("Starting value function computation...")
+        
+        # Extract x, y coordinates from the grid states
+        print("Extracting grid coordinates...")
+        x = grid.states[..., 0]
+        y = grid.states[..., 1]
+        print(f"Grid shape: {grid.shape}")
+        
+        # Get signed distances for the x, y coordinates
+        print("Computing signed distances...")
+        failure_set = env.get_signed_distances(x, y)
+        print("Signed distances computed successfully")
+        print(f"Failure set shape: {failure_set.shape}")
 
-    # Create solver settings
-    solver_settings = hj.SolverSettings.with_accuracy(
-        'very_high',
-        hamiltonian_postprocessor=hj.solver.backwards_reachable_tube
-    )
-    
-    current_times = times
-    values = None
-    converged = False
-    final_time = None
-    
-    while not converged and current_times[-1] > max_time:  # Check the last time point
-        # Solve for current time horizon with progress bar enabled
-        values = hj.solve(solver_settings, dynamics, grid, current_times, failure_set, progress_bar=True)
+        # Create solver settings
+        print("Creating solver settings...")
+        solver_settings = hj.SolverSettings.with_accuracy(
+            'very_high',
+            hamiltonian_postprocessor=hj.solver.backwards_reachable_tube
+        )
+        print("Solver settings created successfully")
         
-        # Keep values on GPU/device until we need to check convergence
-        values_device = values
+        current_times = times
+        values = None
+        converged = False
+        final_time = None
         
-        # Check convergence by comparing only the last two time steps
-        # Move only the last two time steps to CPU for comparison
-        last_two_steps = jax.device_get(values_device[-2:])
-        max_change = np.max(np.abs(last_two_steps[1] - last_two_steps[0]))
+        iteration = 0
+        while not converged and current_times[-1] > max_time:  # Check the last time point
+            print(f"\nStarting iteration {iteration}")
+            print(f"Current time horizon: {current_times[-1]}")
+            print(f"Number of time points: {len(current_times)}")
+            
+            try:
+                # Clear JAX cache before each solve to help with memory
+                jax.clear_caches()
+                
+                # Solve for current time horizon with progress bar enabled
+                print("Solving value function...")
+                values = hj.solve(solver_settings, dynamics, grid, current_times, failure_set, progress_bar=True)
+                print("Value function solved successfully")
+                print(f"Value function shape: {values.shape}")
+                
+                # Keep values on GPU/device until we need to check convergence
+                values_device = values
+                
+                # Check convergence by comparing only the last two time steps
+                print("Checking convergence...")
+                # Move only the last two time steps to CPU for comparison
+                last_two_steps = jax.device_get(values_device[-2:])
+                max_change = np.max(np.abs(last_two_steps[1] - last_two_steps[0]))
+                print(f"Max change: {max_change:.2e}")
+                
+                if max_change < convergence_threshold:
+                    converged = True
+                    final_time = float(current_times[-1])
+                    print(f"Converged with max change: {max_change:.2e} at time {final_time}")
+                else:
+                    # Extend time horizon by doubling it and double the number of points
+                    print("Not converged, extending time horizon...")
+                    new_end_time = current_times[-1] * 2  # Double the end time (more negative)
+                    new_num_points = len(current_times) * 2  # Double the number of points
+                    new_times = jnp.linspace(0, new_end_time, new_num_points)
+                    current_times = new_times
+                    print(f"New time horizon: {new_end_time}")
+                    print(f"New number of time points: {len(new_times)}")
+                
+            except Exception as e:
+                print(f"Error during iteration {iteration}: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                raise
+            
+            iteration += 1
         
-        if max_change < convergence_threshold:
-            converged = True
-            final_time = float(current_times[-1])
-            print(f"Converged with max change: {max_change:.2e} at time {final_time}")
-        else:
-            # Extend time horizon by doubling it and double the number of points
-            new_end_time = current_times[-1] * 2  # Double the end time (more negative)
-            new_num_points = len(current_times) * 2  # Double the number of points
-            new_times = jnp.linspace(0, new_end_time, new_num_points)
-            current_times = new_times
-    
-    return values, converged, final_time 
+        return values, converged, final_time
+        
+    except Exception as e:
+        print(f"Error in get_V: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise 
