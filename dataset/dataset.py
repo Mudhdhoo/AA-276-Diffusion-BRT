@@ -100,21 +100,29 @@ def process_sample(args):
     sample_id, output_dir, global_key, temp_dir = args
     
     try:
+        print(f"Starting sample {sample_id}")
+        
         # Create sample directory
         sample_dir = os.path.join(output_dir, f'{SAMPLE_DIR_PREFIX}{sample_id:03d}')
         os.makedirs(sample_dir, exist_ok=True)
+        print(f"Created directory for sample {sample_id}")
         
         # Get new subkey for this sample
         global_key, subkey = jax.random.split(global_key)
+        print(f"Generated random key for sample {sample_id}")
         
         # Create and setup environment
+        print(f"Creating environment for sample {sample_id}")
         env = AirplaneObstacleEnvironment()
         env.set_random_obstacles(DEFAULT_NUM_OBSTACLES, key=subkey)
+        print(f"Environment created for sample {sample_id}")
         
         # Save environment plot
+        print(f"Saving environment plot for sample {sample_id}")
         save_environment_plot(env, os.path.join(sample_dir, ENVIRONMENT_PLOT_NAME))
         
         # Setup grid and dynamics
+        print(f"Setting up grid for sample {sample_id}")
         grid = hj.Grid.from_lattice_parameters_and_boundary_conditions(
             domain=hj.sets.Box(
                 jnp.array([0.0, 0.0, -jnp.pi]),
@@ -122,21 +130,27 @@ def process_sample(args):
             ),  
             shape=(N_POINTS, N_POINTS, N_POINTS)
         )
+        print(f"Grid setup complete for sample {sample_id}")
         
         # Create and save environment grid
+        print(f"Creating environment grid for sample {sample_id}")
         env_grid = create_environment_grid(env, grid)
         np.save(os.path.join(sample_dir, ENVIRONMENT_GRID_NAME), env_grid)
+        print(f"Environment grid saved for sample {sample_id}")
         
         initial_times = jnp.linspace(0, T, N_POINTS)
         dynamics = AirplaneDynamics()
         
         # Clear any existing JAX computations
+        print(f"Clearing JAX caches for sample {sample_id}")
         jax.clear_caches()
         
         # Compute value function and measure time
+        print(f"Starting value function computation for sample {sample_id}")
         start_time = time.time()
         V, converged, final_time = get_V(env, dynamics, grid, initial_times)
         convergence_time = time.time() - start_time
+        print(f"Value function computation completed for sample {sample_id}")
         
         result = {
             'sample_id': sample_id,
@@ -152,15 +166,20 @@ def process_sample(args):
         write_result_to_csv(result, temp_csv)
         
         if not converged or V is None:
+            print(f"Sample {sample_id} did not converge or V is None")
             return result
         
         # Save value function data
+        print(f"Saving value function for sample {sample_id}")
         np.save(os.path.join(sample_dir, VALUE_FUNCTION_NAME), V)
+        print(f"Sample {sample_id} completed successfully")
         
         return result
         
     except Exception as e:
         print(f"Error processing sample {sample_id}: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def combine_csv_files(temp_dir, output_csv):
