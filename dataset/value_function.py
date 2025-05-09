@@ -87,20 +87,27 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
             print(f"Number of time points: {len(current_times)}")
             
             try:
-                # Clear JAX cache before each solve to help with memory
-                jax.clear_caches()
-                
                 # Solve for current time horizon
                 print("Solving value function...")
                 try:
+                    # Clear JAX cache before solve
+                    jax.clear_caches()
+                    
+                    # Move failure set to device if not already there
+                    failure_set_device = jax.device_put(failure_set)
+                    
+                    # Solve with explicit device placement
                     values = hj.solve(
                         solver_settings, 
                         dynamics, 
                         grid, 
                         current_times, 
-                        failure_set, 
+                        failure_set_device, 
                         progress_bar=False
                     )
+                    
+                    # Move result back to host immediately
+                    values = jax.device_get(values)
                     print("Value function solved successfully")
                     print(f"Value function shape: {values.shape}")
                 except Exception as solve_error:
@@ -109,13 +116,13 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
                     traceback.print_exc()
                     raise
                 
-                # Keep values on GPU/device until we need to check convergence
+                # Keep values on CPU for convergence check
                 values_device = values
                 
                 # Check convergence by comparing only the last two time steps
                 print("Checking convergence...")
                 # Move only the last two time steps to CPU for comparison
-                last_two_steps = jax.device_get(values_device[-2:])
+                last_two_steps = values_device[-2:]
                 max_change = np.max(np.abs(last_two_steps[1] - last_two_steps[0]))
                 print(f"Max change: {max_change:.2e}")
                 
