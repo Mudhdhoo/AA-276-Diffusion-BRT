@@ -9,27 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import hj_reachability as hj
 from tqdm import tqdm
-import contextlib
-import io
-import sys
-import os
 from .config import CONVERGENCE_THRESHOLD, MAX_TIME
-
-@contextlib.contextmanager
-def custom_progress_bar(desc):
-    """Context manager to create a custom progress bar that works with multiprocessing.
-    
-    Args:
-        desc: Description to display in the progress bar
-        
-    Yields:
-        tqdm: Progress bar instance
-    """
-    pbar = tqdm(total=100, desc=desc, leave=False)
-    try:
-        yield pbar
-    finally:
-        pbar.close()
 
 def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOLD, max_time=MAX_TIME):
     """Compute the value function with convergence checking.
@@ -70,27 +50,28 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
     converged = False
     final_time = None
     
-    while not converged and current_times[-1] > max_time:  # Check the last time point
-        # Solve for current time horizon with progress bar enabled
-        values = hj.solve(solver_settings, dynamics, grid, current_times, failure_set, progress_bar=True)
-        
-        # Keep values on GPU/device until we need to check convergence
-        values_device = values
-        
-        # Check convergence by comparing only the last two time steps
-        # Move only the last two time steps to CPU for comparison
-        last_two_steps = jax.device_get(values_device[-2:])
-        max_change = np.max(np.abs(last_two_steps[1] - last_two_steps[0]))
-        
-        if max_change < convergence_threshold:
-            converged = True
-            final_time = float(current_times[-1])
-            print(f"Converged with max change: {max_change:.2e} at time {final_time}")
-        else:
-            # Extend time horizon by doubling it and double the number of points
-            new_end_time = current_times[-1] * 2  # Double the end time (more negative)
-            new_num_points = len(current_times) * 2  # Double the number of points
-            new_times = jnp.linspace(0, new_end_time, new_num_points)
-            current_times = new_times
+    try:
+        while not converged and current_times[-1] > max_time:  # Check the last time point
+            # Solve for current time horizon
+            print(f"\nComputing value function with time horizon: {current_times[-1]:.2f}")
+            values = hj.solve(solver_settings, dynamics, grid, current_times, failure_set, progress_bar=True)
+            
+            # Check convergence by comparing only the last two time steps
+            last_two_steps = jax.device_get(values[-2:])
+            max_change = np.max(np.abs(last_two_steps[1] - last_two_steps[0]))
+            
+            if max_change < convergence_threshold:
+                converged = True
+                final_time = float(current_times[-1])
+                print(f"Converged with max change: {max_change:.2e} at time {final_time}")
+            else:
+                # Extend time horizon by doubling it and double the number of points
+                new_end_time = current_times[-1] * 2  # Double the end time (more negative)
+                new_num_points = len(current_times) * 2  # Double the number of points
+                new_times = jnp.linspace(0, new_end_time, new_num_points)
+                current_times = new_times
+    finally:
+        # Clean up JAX resources
+        jax.clear_caches()
     
     return values, converged, final_time 
