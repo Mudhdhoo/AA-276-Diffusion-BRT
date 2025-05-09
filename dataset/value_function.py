@@ -96,15 +96,16 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
                     # Move failure set to device if not already there
                     failure_set_device = jax.device_put(failure_set)
                     
-                    # Solve with explicit device placement
-                    values = hj.solve(
-                        solver_settings, 
-                        dynamics, 
-                        grid, 
-                        current_times, 
-                        failure_set_device, 
-                        progress_bar=False
-                    )
+                    # Solve with explicit device placement and memory management
+                    with jax.default_device(jax.devices()[0]):  # Explicitly use first GPU
+                        values = hj.solve(
+                            solver_settings, 
+                            dynamics, 
+                            grid, 
+                            current_times, 
+                            failure_set_device, 
+                            progress_bar=False
+                        )
                     
                     # Move result back to host immediately
                     values = jax.device_get(values)
