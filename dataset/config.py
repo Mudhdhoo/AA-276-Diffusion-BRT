@@ -18,7 +18,7 @@ DEFAULT_ENV_HEIGHT = 10
 DEFAULT_NUM_OBSTACLES = 3
 
 # Dataset parameters
-NUM_SAMPLES = 10  # Number of examples to generate
+NUM_SAMPLES = 3  # Number of examples to generate
 GLOBAL_SEED = 42  # Global random seed for reproducibility
 
 # Obstacle parameters
@@ -26,7 +26,7 @@ MIN_OBSTACLE_SIZE_RATIO = 0.05
 MAX_OBSTACLE_SIZE_RATIO = 0.15
 
 # GPU configuration
-GPU_MEMORY_FRACTION = 0.4
+GPU_MEMORY_FRACTION = 0.8
 CUDA_VISIBLE_DEVICES = '0'
 
 # Output parameters

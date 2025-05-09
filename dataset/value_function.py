@@ -52,154 +52,45 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
             - converged: Boolean indicating if convergence was achieved
             - final_time: The final time horizon used (None if not converged)
     """
-    try:
-        print("Starting value function computation...")
-        
-        # Configure JAX to disable autotuning
-        print("Configuring JAX settings...")
-        jax.config.update('jax_default_matmul_precision', jax.lax.Precision.DEFAULT)
-        jax.config.update('jax_enable_x64', False)
-        
-        # Extract x, y coordinates from the grid states
-        print("Extracting grid coordinates...")
-        x = grid.states[..., 0]
-        y = grid.states[..., 1]
-        print(f"Grid shape: {grid.shape}")
-        print(f"Grid memory usage: {x.nbytes + y.nbytes} bytes")
-        
-        # Get signed distances for the x, y coordinates
-        print("Computing signed distances...")
-        failure_set = env.get_signed_distances(x, y)
-        print("Signed distances computed successfully")
-        print(f"Failure set shape: {failure_set.shape}")
-        print(f"Failure set memory usage: {failure_set.nbytes} bytes")
+    # Extract x, y coordinates from the grid states
+    x = grid.states[..., 0]
+    y = grid.states[..., 1]
+    
+    # Get signed distances for the x, y coordinates
+    failure_set = env.get_signed_distances(x, y)
 
-        # Create solver settings
-        print("Creating solver settings...")
-        solver_settings = hj.SolverSettings.with_accuracy(
-            'very_high',
-            hamiltonian_postprocessor=hj.solver.backwards_reachable_tube
-        )
-        print("Solver settings created successfully")
+    # Create solver settings
+    solver_settings = hj.SolverSettings.with_accuracy(
+        'very_high',
+        hamiltonian_postprocessor=hj.solver.backwards_reachable_tube
+    )
+    
+    current_times = times
+    values = None
+    converged = False
+    final_time = None
+    
+    while not converged and current_times[-1] > max_time:  # Check the last time point
+        # Solve for current time horizon with progress bar enabled
+        values = hj.solve(solver_settings, dynamics, grid, current_times, failure_set, progress_bar=True)
         
-        current_times = times
-        values = None
-        converged = False
-        final_time = None
+        # Keep values on GPU/device until we need to check convergence
+        values_device = values
         
-        iteration = 0
-        while not converged and current_times[-1] > max_time:
-            print(f"\nStarting iteration {iteration}")
-            print(f"Current time horizon: {current_times[-1]}")
-            print(f"Number of time points: {len(current_times)}")
-            
-            try:
-                # Solve for current time horizon
-                print("Solving value function...")
-                try:
-                    # Clear JAX cache before solve
-                    print("Clearing JAX caches...")
-                    jax.clear_caches()
-                    
-                    # Move failure set to device if not already there
-                    print("Moving failure set to device...")
-                    failure_set_device = jax.device_put(failure_set)
-                    print("Failure set moved to device successfully")
-                    
-                    # Print device information
-                    print(f"Available devices: {jax.devices()}")
-                    print(f"Current device: {jax.devices()[0]}")
-                    
-                    # Solve with explicit device placement and memory management
-                    print("Starting solve operation...")
-                    with jax.default_device(jax.devices()[0]):
-                        try:
-                            # Print memory info before solve
-                            print("Memory info before solve:")
-                            print(f"Failure set device: {failure_set_device.device()}")
-                            print(f"Grid device: {grid.states.device()}")
-                            print(f"Times device: {current_times.device()}")
-                            
-                            # Disable JIT and use lower precision
-                            print("Configuring solve operation...")
-                            with jax.disable_jit():
-                                with jax.default_matmul_precision(jax.lax.Precision.DEFAULT):
-                                    print("Executing solve operation...")
-                                    values = hj.solve(
-                                        solver_settings, 
-                                        dynamics, 
-                                        grid, 
-                                        current_times, 
-                                        failure_set_device, 
-                                        progress_bar=False
-                                    )
-                                    print("Solve operation completed successfully")
-                            
-                            # Move result back to host immediately
-                            print("Moving results back to host...")
-                            values = jax.device_get(values)
-                            print("Value function solved successfully")
-                            print(f"Value function shape: {values.shape}")
-                            print(f"Value function memory usage: {values.nbytes} bytes")
-                        except Exception as solve_error:
-                            print(f"Error during solve operation: {str(solve_error)}")
-                            print(f"Error type: {type(solve_error)}")
-                            print("Error details:")
-                            import traceback
-                            traceback.print_exc()
-                            
-                            # Try to get more information about the error
-                            if hasattr(solve_error, '__cause__'):
-                                print(f"Caused by: {str(solve_error.__cause__)}")
-                            if hasattr(solve_error, '__context__'):
-                                print(f"Context: {str(solve_error.__context__)}")
-                            
-                            raise
-                except Exception as solve_error:
-                    print(f"Error during solve: {str(solve_error)}")
-                    print(f"Error type: {type(solve_error)}")
-                    import traceback
-                    traceback.print_exc()
-                    raise
-                
-                # Keep values on CPU for convergence check
-                values_device = values
-                
-                # Check convergence by comparing only the last two time steps
-                print("Checking convergence...")
-                # Move only the last two time steps to CPU for comparison
-                last_two_steps = values_device[-2:]
-                max_change = np.max(np.abs(last_two_steps[1] - last_two_steps[0]))
-                print(f"Max change: {max_change:.2e}")
-                
-                if max_change < convergence_threshold:
-                    converged = True
-                    final_time = float(current_times[-1])
-                    print(f"Converged with max change: {max_change:.2e} at time {final_time}")
-                else:
-                    # Extend time horizon by doubling it and double the number of points
-                    print("Not converged, extending time horizon...")
-                    new_end_time = current_times[-1] * 2  # Double the end time (more negative)
-                    new_num_points = len(current_times) * 2  # Double the number of points
-                    new_times = jnp.linspace(0, new_end_time, new_num_points)
-                    current_times = new_times
-                    print(f"New time horizon: {new_end_time}")
-                    print(f"New number of time points: {len(new_times)}")
-                
-            except Exception as e:
-                print(f"Error during iteration {iteration}: {str(e)}")
-                print(f"Error type: {type(e)}")
-                import traceback
-                traceback.print_exc()
-                raise
-            
-            iteration += 1
+        # Check convergence by comparing only the last two time steps
+        # Move only the last two time steps to CPU for comparison
+        last_two_steps = jax.device_get(values_device[-2:])
+        max_change = np.max(np.abs(last_two_steps[1] - last_two_steps[0]))
         
-        return values, converged, final_time
-        
-    except Exception as e:
-        print(f"Error in get_V: {str(e)}")
-        print(f"Error type: {type(e)}")
-        import traceback
-        traceback.print_exc()
-        raise 
+        if max_change < convergence_threshold:
+            converged = True
+            final_time = float(current_times[-1])
+            print(f"Converged with max change: {max_change:.2e} at time {final_time}")
+        else:
+            # Extend time horizon by doubling it and double the number of points
+            new_end_time = current_times[-1] * 2  # Double the end time (more negative)
+            new_num_points = len(current_times) * 2  # Double the number of points
+            new_times = jnp.linspace(0, new_end_time, new_num_points)
+            current_times = new_times
+    
+    return values, converged, final_time 

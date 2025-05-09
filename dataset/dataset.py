@@ -99,88 +99,61 @@ def process_sample(args):
     """
     sample_id, output_dir, global_key, temp_dir = args
     
-    try:
-        print(f"Starting sample {sample_id}")
-        
-        # Create sample directory
-        sample_dir = os.path.join(output_dir, f'{SAMPLE_DIR_PREFIX}{sample_id:03d}')
-        os.makedirs(sample_dir, exist_ok=True)
-        print(f"Created directory for sample {sample_id}")
-        
-        # Get new subkey for this sample
-        global_key, subkey = jax.random.split(global_key)
-        print(f"Generated random key for sample {sample_id}")
-        
-        # Create and setup environment
-        print(f"Creating environment for sample {sample_id}")
-        env = AirplaneObstacleEnvironment()
-        env.set_random_obstacles(DEFAULT_NUM_OBSTACLES, key=subkey)
-        print(f"Environment created for sample {sample_id}")
-        
-        # Save environment plot
-        print(f"Saving environment plot for sample {sample_id}")
-        save_environment_plot(env, os.path.join(sample_dir, ENVIRONMENT_PLOT_NAME))
-        
-        # Setup grid and dynamics
-        print(f"Setting up grid for sample {sample_id}")
-        grid = hj.Grid.from_lattice_parameters_and_boundary_conditions(
-            domain=hj.sets.Box(
-                jnp.array([0.0, 0.0, -jnp.pi]),
-                jnp.array([env.width, env.height, jnp.pi])
-            ),  
-            shape=(N_POINTS, N_POINTS, N_POINTS)
-        )
-        print(f"Grid setup complete for sample {sample_id}")
-        
-        # Create and save environment grid
-        print(f"Creating environment grid for sample {sample_id}")
-        env_grid = create_environment_grid(env, grid)
-        np.save(os.path.join(sample_dir, ENVIRONMENT_GRID_NAME), env_grid)
-        print(f"Environment grid saved for sample {sample_id}")
-        
-        initial_times = jnp.linspace(0, T, N_POINTS)
-        dynamics = AirplaneDynamics()
-        
-        # Clear any existing JAX computations
-        print(f"Clearing JAX caches for sample {sample_id}")
-        jax.clear_caches()
-        
-        # Compute value function and measure time
-        print(f"Starting value function computation for sample {sample_id}")
-        start_time = time.time()
-        V, converged, final_time = get_V(env, dynamics, grid, initial_times)
-        convergence_time = time.time() - start_time
-        print(f"Value function computation completed for sample {sample_id}")
-        
-        result = {
-            'sample_id': sample_id,
-            'seed': int(jax.random.fold_in(subkey, 0)[0]),
-            'converged': converged,
-            'convergence_time': convergence_time,
-            'final_time_horizon': float(final_time) if converged else None,
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        # Write result to temporary CSV file
-        temp_csv = os.path.join(temp_dir, f'result_{sample_id}.csv')
-        write_result_to_csv(result, temp_csv)
-        
-        if not converged or V is None:
-            print(f"Sample {sample_id} did not converge or V is None")
-            return result
-        
-        # Save value function data
-        print(f"Saving value function for sample {sample_id}")
-        np.save(os.path.join(sample_dir, VALUE_FUNCTION_NAME), V)
-        print(f"Sample {sample_id} completed successfully")
-        
+    # Create sample directory
+    sample_dir = os.path.join(output_dir, f'{SAMPLE_DIR_PREFIX}{sample_id:03d}')
+    os.makedirs(sample_dir, exist_ok=True)
+    
+    # Get new subkey for this sample
+    global_key, subkey = jax.random.split(global_key)
+    
+    # Create and setup environment
+    env = AirplaneObstacleEnvironment()
+    env.set_random_obstacles(DEFAULT_NUM_OBSTACLES, key=subkey)
+    
+    # Save environment plot
+    save_environment_plot(env, os.path.join(sample_dir, ENVIRONMENT_PLOT_NAME))
+    
+    # Setup grid and dynamics
+    grid = hj.Grid.from_lattice_parameters_and_boundary_conditions(
+        domain=hj.sets.Box(
+            jnp.array([0.0, 0.0, -jnp.pi]),
+            jnp.array([env.width, env.height, jnp.pi])
+        ),  
+        shape=(N_POINTS, N_POINTS, N_POINTS)
+    )
+    
+    # Create and save environment grid
+    env_grid = create_environment_grid(env, grid)
+    np.save(os.path.join(sample_dir, ENVIRONMENT_GRID_NAME), env_grid)
+    
+    initial_times = jnp.linspace(0, T, N_POINTS)
+    dynamics = AirplaneDynamics()
+    
+    # Compute value function and measure time
+    start_time = time.time()
+    V, converged, final_time = get_V(env, dynamics, grid, initial_times)
+    convergence_time = time.time() - start_time
+    
+    result = {
+        'sample_id': sample_id,
+        'seed': int(jax.random.fold_in(subkey, 0)[0]),
+        'converged': converged,
+        'convergence_time': convergence_time,
+        'final_time_horizon': float(final_time) if converged else None,
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    # Write result to temporary CSV file
+    temp_csv = os.path.join(temp_dir, f'result_{sample_id}.csv')
+    write_result_to_csv(result, temp_csv)
+    
+    if not converged or V is None:
         return result
-        
-    except Exception as e:
-        print(f"Error processing sample {sample_id}: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return None
+    
+    # Save value function data
+    np.save(os.path.join(sample_dir, VALUE_FUNCTION_NAME), V)
+    
+    return result
 
 def combine_csv_files(temp_dir, output_csv):
     """Combine all temporary CSV files into the final output file.
@@ -220,26 +193,28 @@ def main():
         # Initialize global key
         global_key = jax.random.PRNGKey(GLOBAL_SEED)
         
+        # Create a list of keys for each sample
+        keys = []
+        current_key = global_key
+        for _ in range(NUM_SAMPLES):
+            current_key, subkey = jax.random.split(current_key)
+            keys.append(subkey)
+        
         # Check if we're using a GPU
         if jax.default_backend() == 'gpu':
             # For GPU, process samples sequentially to avoid memory issues
             print("Processing samples sequentially on GPU")
             results = []
             pbar = tqdm(total=NUM_SAMPLES, desc="Processing samples", unit="sample")
-            
-            # Process samples sequentially on GPU
-            for i in range(NUM_SAMPLES):
-                # Get new subkey for this sample
-                global_key, subkey = jax.random.split(global_key)
-                result = process_sample((i, output_dir, global_key, temp_dir))
+            for i, key in enumerate(keys):
+                result = process_sample((i, output_dir, key, temp_dir))
                 if result is not None:
                     results.append(result)
                 pbar.update(1)
-                if result is not None:
-                    pbar.set_postfix({
-                        'converged': result['converged'],
-                        'time_horizon': result.get('final_time_horizon', 'N/A')
-                    })
+                pbar.set_postfix({
+                    'converged': result['converged'],
+                    'time_horizon': result.get('final_time_horizon', 'N/A')
+                })
             pbar.close()
         else:
             # For CPU, use multiprocessing
@@ -253,7 +228,7 @@ def main():
             
             with mp.Pool(num_cores) as pool:
                 # Create arguments for each sample
-                args = [(i, output_dir, global_key, temp_dir) for i in range(NUM_SAMPLES)]
+                args = [(i, output_dir, key, temp_dir) for i, key in enumerate(keys)]
                 
                 # Process samples in parallel
                 for result in pool.imap_unordered(process_sample, args):
