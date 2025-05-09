@@ -386,8 +386,8 @@ def process_sample_wrapper(args):
     return process_sample(sample_id, output_dir, key)
 
 def main():
-    # Create output directory with timestamp
-    output_dir = os.path.join('outputs', get_timestamp_dir())
+    # Create output directory with timestamp in dataset/outputs
+    output_dir = os.path.join('dataset', 'outputs', get_timestamp_dir())
     os.makedirs(output_dir, exist_ok=True)
     
     # Create CSV file for logging
@@ -411,21 +411,25 @@ def main():
         keys.append(subkey)
     
     # Process samples in parallel
+    results = []
     with mp.Pool(num_cores) as pool:
         args = [(i, key, output_dir) for i, key in enumerate(keys)]
-        results = pool.map(process_sample_wrapper, args)
+        for result in pool.imap_unordered(process_sample_wrapper, args):
+            if result is not None:
+                results.append(result)
+                # Write result immediately to CSV
+                with open(csv_path, 'a', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        result['sample_id'],
+                        result['seed'],
+                        result['converged'],
+                        result['convergence_time'],
+                        result['timestamp']
+                    ])
+                print(f"Saved result for sample {result['sample_id']}")
     
-    # Write all results to CSV
-    with open(csv_path, 'a', newline='') as f:
-        writer = csv.writer(f)
-        for result in results:
-            writer.writerow([
-                result['sample_id'],
-                result['seed'],
-                result['converged'],
-                result['convergence_time'],
-                result['timestamp']
-            ])
+    print(f"Completed processing {len(results)} samples")
 
 if __name__ == "__main__":
     main()
