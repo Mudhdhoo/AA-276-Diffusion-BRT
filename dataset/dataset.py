@@ -1,7 +1,7 @@
 """Main module for dataset generation.
 
 This module handles the generation of dataset samples for the airplane obstacle environment.
-It manages parallel processing, GPU configuration, and result logging.
+It manages result logging and sequential processing.
 """
 
 import os
@@ -14,16 +14,12 @@ import jax.numpy as jnp
 import numpy as np
 import csv
 import time
-import multiprocessing as mp
 from datetime import datetime
 import hj_reachability as hj
 from utils.visualization import save_environment_plot
 from tqdm import tqdm
-import threading
-import contextlib
-import io
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
 from dataset.config import (
     N_POINTS, T, DEFAULT_NUM_OBSTACLES,
@@ -34,7 +30,6 @@ from dataset.config import (
 from dataset.environment import AirplaneObstacleEnvironment
 from dataset.dynamics import AirplaneDynamics
 from dataset.value_function import get_V
-from dataset.configure_gpu import main as configure_gpu
 
 def get_timestamp_dir():
     """Create a directory name based on current timestamp.
@@ -179,11 +174,6 @@ def combine_csv_files(temp_dir, output_csv):
 
 def main():
     """Main function to generate the dataset."""
-    # Configure GPU using the dedicated script
-    if not configure_gpu():
-        print("GPU configuration failed. Exiting.")
-        sys.exit(1)
-    
     # Create output directory with timestamp
     output_dir = os.path.join(OUTPUT_DIR, get_timestamp_dir())
     os.makedirs(output_dir, exist_ok=True)
@@ -200,46 +190,20 @@ def main():
             current_key, subkey = jax.random.split(current_key)
             keys.append(subkey)
         
-        # Check if we're using a GPU
-        if jax.default_backend() == 'gpu':
-            # For GPU, process samples sequentially to avoid memory issues
-            print("Processing samples sequentially on GPU")
-            results = []
-            pbar = tqdm(total=NUM_SAMPLES, desc="Processing samples", unit="sample")
-            for i, key in enumerate(keys):
-                result = process_sample((i, output_dir, key, temp_dir))
-                if result is not None:
-                    results.append(result)
-                pbar.update(1)
-                pbar.set_postfix({
-                    'converged': result['converged'],
-                    'time_horizon': result.get('final_time_horizon', 'N/A')
-                })
-            pbar.close()
-        else:
-            # For CPU, use multiprocessing
-            num_cores = min(mp.cpu_count(), NUM_SAMPLES)
-            print(f"Using {num_cores} CPU cores")
-            print(f"Processing {NUM_SAMPLES} samples in parallel...")
-            
-            # Process samples in parallel
-            results = []
-            pbar = tqdm(total=NUM_SAMPLES, desc="Processing samples", unit="sample")
-            
-            with mp.Pool(num_cores) as pool:
-                # Create arguments for each sample
-                args = [(i, output_dir, key, temp_dir) for i, key in enumerate(keys)]
-                
-                # Process samples in parallel
-                for result in pool.imap_unordered(process_sample, args):
-                    if result is not None:
-                        results.append(result)
-                    pbar.update(1)
-                    pbar.set_postfix({
-                        'converged': result['converged'],
-                        'time_horizon': result.get('final_time_horizon', 'N/A')
-                    })
-            pbar.close()
+        # Process samples sequentially
+        print("Processing samples sequentially")
+        results = []
+        pbar = tqdm(total=NUM_SAMPLES, desc="Processing samples", unit="sample")
+        for i, key in enumerate(keys):
+            result = process_sample((i, output_dir, key, temp_dir))
+            if result is not None:
+                results.append(result)
+            pbar.update(1)
+            pbar.set_postfix({
+                'converged': result['converged'],
+                'time_horizon': result.get('final_time_horizon', 'N/A')
+            })
+        pbar.close()
         
         # Combine all temporary CSV files into the final output
         combine_csv_files(temp_dir, os.path.join(output_dir, RESULTS_CSV_NAME))

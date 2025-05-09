@@ -25,10 +25,6 @@ GLOBAL_SEED = 42  # Global random seed for reproducibility
 MIN_OBSTACLE_SIZE_RATIO = 0.05
 MAX_OBSTACLE_SIZE_RATIO = 0.15
 
-# GPU configuration
-GPU_MEMORY_FRACTION = 0.8
-CUDA_VISIBLE_DEVICES = '0'
-
 # Output parameters
 OUTPUT_DIR = ROOT_DIR / 'dataset' / 'outputs'
 SAMPLE_DIR_PREFIX = 'sample_'
