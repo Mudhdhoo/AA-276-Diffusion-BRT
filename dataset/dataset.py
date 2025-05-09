@@ -151,7 +151,7 @@ def process_sample(sample_id, output_dir, key):
         print(f"Sample {sample_id} did not converge")
         return result
     
-    # Save value function data
+    # Save value function data (only contains last two timesteps when converged)
     print(f"Saving value function for sample {sample_id}")
     np.save(os.path.join(sample_dir, VALUE_FUNCTION_NAME), V)
     

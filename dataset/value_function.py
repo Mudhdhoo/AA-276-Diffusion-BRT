@@ -64,6 +64,8 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
                 converged = True
                 final_time = float(current_times[-1])
                 print(f"Converged with max change: {max_change:.2e} at time {final_time}")
+                # Only keep the last two timesteps
+                values = values[-2:]
             else:
                 # Extend time horizon by doubling it and double the number of points
                 new_end_time = current_times[-1] * 2  # Double the end time (more negative)
