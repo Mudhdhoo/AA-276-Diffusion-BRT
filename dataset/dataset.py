@@ -1,13 +1,17 @@
 """Main module for dataset generation.
 
 This module handles the generation of dataset samples for the airplane obstacle environment.
-It manages result logging and sequential processing.
+It manages result logging and parallel processing of independent samples.
 """
 
 import os
 import sys
 # Add project root to Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Configure matplotlib to use a non-interactive backend
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
 
 import jax
 import jax.numpy as jnp
@@ -20,6 +24,9 @@ from utils.visualization import save_environment_plot
 from tqdm import tqdm
 import tempfile
 from pathlib import Path
+import concurrent.futures
+from functools import partial
+import multiprocessing
 
 from dataset.config import (
     N_POINTS, T, DEFAULT_NUM_OBSTACLES,
@@ -83,27 +90,25 @@ def create_environment_grid(env, grid):
     
     return binary_grid
 
-def process_sample(args):
+def process_sample(sample_id, output_dir, key, temp_dir):
     """Process a single sample with given ID and key.
     
     Args:
-        args: Tuple containing (sample_id, output_dir, global_key, temp_dir)
+        sample_id: ID of the sample to process
+        output_dir: Directory to save outputs
+        key: JAX random key for this sample
+        temp_dir: Directory for temporary files
         
     Returns:
         Dictionary containing sample results
     """
-    sample_id, output_dir, global_key, temp_dir = args
-    
     # Create sample directory
     sample_dir = os.path.join(output_dir, f'{SAMPLE_DIR_PREFIX}{sample_id:03d}')
     os.makedirs(sample_dir, exist_ok=True)
     
-    # Get new subkey for this sample
-    global_key, subkey = jax.random.split(global_key)
-    
     # Create and setup environment
     env = AirplaneObstacleEnvironment()
-    env.set_random_obstacles(DEFAULT_NUM_OBSTACLES, key=subkey)
+    env.set_random_obstacles(DEFAULT_NUM_OBSTACLES, key=key)
     
     # Save environment plot
     save_environment_plot(env, os.path.join(sample_dir, ENVIRONMENT_PLOT_NAME))
@@ -131,7 +136,7 @@ def process_sample(args):
     
     result = {
         'sample_id': sample_id,
-        'seed': int(jax.random.fold_in(subkey, 0)[0]),
+        'seed': int(jax.random.fold_in(key, 0)[0]),
         'converged': converged,
         'convergence_time': convergence_time,
         'final_time_horizon': float(final_time) if converged else None,
@@ -190,20 +195,31 @@ def main():
             current_key, subkey = jax.random.split(current_key)
             keys.append(subkey)
         
-        # Process samples sequentially
-        print("Processing samples sequentially")
+        # Get number of CPU cores to use
+        num_cores = min(multiprocessing.cpu_count(), NUM_SAMPLES)
+        print(f"Using {num_cores} CPU cores for parallel processing")
+        
+        # Process samples in parallel using ProcessPoolExecutor
+        print(f"Processing {NUM_SAMPLES} samples in parallel")
         results = []
-        pbar = tqdm(total=NUM_SAMPLES, desc="Processing samples", unit="sample")
-        for i, key in enumerate(keys):
-            result = process_sample((i, output_dir, key, temp_dir))
-            if result is not None:
-                results.append(result)
-            pbar.update(1)
-            pbar.set_postfix({
-                'converged': result['converged'],
-                'time_horizon': result.get('final_time_horizon', 'N/A')
-            })
-        pbar.close()
+        with concurrent.futures.ProcessPoolExecutor(max_workers=num_cores) as executor:
+            # Submit all tasks
+            future_to_id = {
+                executor.submit(process_sample, i, output_dir, key, temp_dir): i 
+                for i, key in enumerate(keys)
+            }
+            
+            # Process results as they complete
+            with tqdm(total=NUM_SAMPLES, desc="Processing samples", unit="sample") as pbar:
+                for future in concurrent.futures.as_completed(future_to_id):
+                    result = future.result()
+                    if result is not None:
+                        results.append(result)
+                    pbar.update(1)
+                    pbar.set_postfix({
+                        'converged': result['converged'],
+                        'time_horizon': result.get('final_time_horizon', 'N/A')
+                    })
         
         # Combine all temporary CSV files into the final output
         combine_csv_files(temp_dir, os.path.join(output_dir, RESULTS_CSV_NAME))
