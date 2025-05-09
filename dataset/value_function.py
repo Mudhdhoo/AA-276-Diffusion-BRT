@@ -55,6 +55,11 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
     try:
         print("Starting value function computation...")
         
+        # Configure JAX to disable autotuning
+        print("Configuring JAX settings...")
+        jax.config.update('jax_default_matmul_precision', jax.lax.Precision.DEFAULT)
+        jax.config.update('jax_enable_x64', False)
+        
         # Extract x, y coordinates from the grid states
         print("Extracting grid coordinates...")
         x = grid.states[..., 0]
@@ -109,28 +114,47 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
                     print("Starting solve operation...")
                     with jax.default_device(jax.devices()[0]):
                         try:
-                            values = hj.solve(
-                                solver_settings, 
-                                dynamics, 
-                                grid, 
-                                current_times, 
-                                failure_set_device, 
-                                progress_bar=False
-                            )
-                            print("Solve operation completed successfully")
+                            # Print memory info before solve
+                            print("Memory info before solve:")
+                            print(f"Failure set device: {failure_set_device.device()}")
+                            print(f"Grid device: {grid.states.device()}")
+                            print(f"Times device: {current_times.device()}")
+                            
+                            # Disable JIT and use lower precision
+                            print("Configuring solve operation...")
+                            with jax.disable_jit():
+                                with jax.default_matmul_precision(jax.lax.Precision.DEFAULT):
+                                    print("Executing solve operation...")
+                                    values = hj.solve(
+                                        solver_settings, 
+                                        dynamics, 
+                                        grid, 
+                                        current_times, 
+                                        failure_set_device, 
+                                        progress_bar=False
+                                    )
+                                    print("Solve operation completed successfully")
+                            
+                            # Move result back to host immediately
+                            print("Moving results back to host...")
+                            values = jax.device_get(values)
+                            print("Value function solved successfully")
+                            print(f"Value function shape: {values.shape}")
+                            print(f"Value function memory usage: {values.nbytes} bytes")
                         except Exception as solve_error:
                             print(f"Error during solve operation: {str(solve_error)}")
                             print(f"Error type: {type(solve_error)}")
+                            print("Error details:")
                             import traceback
                             traceback.print_exc()
+                            
+                            # Try to get more information about the error
+                            if hasattr(solve_error, '__cause__'):
+                                print(f"Caused by: {str(solve_error.__cause__)}")
+                            if hasattr(solve_error, '__context__'):
+                                print(f"Context: {str(solve_error.__context__)}")
+                            
                             raise
-                    
-                    # Move result back to host immediately
-                    print("Moving results back to host...")
-                    values = jax.device_get(values)
-                    print("Value function solved successfully")
-                    print(f"Value function shape: {values.shape}")
-                    print(f"Value function memory usage: {values.nbytes} bytes")
                 except Exception as solve_error:
                     print(f"Error during solve: {str(solve_error)}")
                     print(f"Error type: {type(solve_error)}")
