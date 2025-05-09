@@ -90,11 +90,24 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
                 # Clear JAX cache before each solve to help with memory
                 jax.clear_caches()
                 
-                # Solve for current time horizon with progress bar enabled
+                # Solve for current time horizon
                 print("Solving value function...")
-                values = hj.solve(solver_settings, dynamics, grid, current_times, failure_set, progress_bar=True)
-                print("Value function solved successfully")
-                print(f"Value function shape: {values.shape}")
+                try:
+                    values = hj.solve(
+                        solver_settings, 
+                        dynamics, 
+                        grid, 
+                        current_times, 
+                        failure_set, 
+                        progress_bar=False
+                    )
+                    print("Value function solved successfully")
+                    print(f"Value function shape: {values.shape}")
+                except Exception as solve_error:
+                    print(f"Error during solve: {str(solve_error)}")
+                    import traceback
+                    traceback.print_exc()
+                    raise
                 
                 # Keep values on GPU/device until we need to check convergence
                 values_device = values
