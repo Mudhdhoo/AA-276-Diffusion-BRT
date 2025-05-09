@@ -60,12 +60,14 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
         x = grid.states[..., 0]
         y = grid.states[..., 1]
         print(f"Grid shape: {grid.shape}")
+        print(f"Grid memory usage: {x.nbytes + y.nbytes} bytes")
         
         # Get signed distances for the x, y coordinates
         print("Computing signed distances...")
         failure_set = env.get_signed_distances(x, y)
         print("Signed distances computed successfully")
         print(f"Failure set shape: {failure_set.shape}")
+        print(f"Failure set memory usage: {failure_set.nbytes} bytes")
 
         # Create solver settings
         print("Creating solver settings...")
@@ -81,7 +83,7 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
         final_time = None
         
         iteration = 0
-        while not converged and current_times[-1] > max_time:  # Check the last time point
+        while not converged and current_times[-1] > max_time:
             print(f"\nStarting iteration {iteration}")
             print(f"Current time horizon: {current_times[-1]}")
             print(f"Number of time points: {len(current_times)}")
@@ -91,28 +93,47 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
                 print("Solving value function...")
                 try:
                     # Clear JAX cache before solve
+                    print("Clearing JAX caches...")
                     jax.clear_caches()
                     
                     # Move failure set to device if not already there
+                    print("Moving failure set to device...")
                     failure_set_device = jax.device_put(failure_set)
+                    print("Failure set moved to device successfully")
+                    
+                    # Print device information
+                    print(f"Available devices: {jax.devices()}")
+                    print(f"Current device: {jax.devices()[0]}")
                     
                     # Solve with explicit device placement and memory management
-                    with jax.default_device(jax.devices()[0]):  # Explicitly use first GPU
-                        values = hj.solve(
-                            solver_settings, 
-                            dynamics, 
-                            grid, 
-                            current_times, 
-                            failure_set_device, 
-                            progress_bar=False
-                        )
+                    print("Starting solve operation...")
+                    with jax.default_device(jax.devices()[0]):
+                        try:
+                            values = hj.solve(
+                                solver_settings, 
+                                dynamics, 
+                                grid, 
+                                current_times, 
+                                failure_set_device, 
+                                progress_bar=False
+                            )
+                            print("Solve operation completed successfully")
+                        except Exception as solve_error:
+                            print(f"Error during solve operation: {str(solve_error)}")
+                            print(f"Error type: {type(solve_error)}")
+                            import traceback
+                            traceback.print_exc()
+                            raise
                     
                     # Move result back to host immediately
+                    print("Moving results back to host...")
                     values = jax.device_get(values)
                     print("Value function solved successfully")
                     print(f"Value function shape: {values.shape}")
+                    print(f"Value function memory usage: {values.nbytes} bytes")
                 except Exception as solve_error:
                     print(f"Error during solve: {str(solve_error)}")
+                    print(f"Error type: {type(solve_error)}")
                     import traceback
                     traceback.print_exc()
                     raise
@@ -143,6 +164,7 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
                 
             except Exception as e:
                 print(f"Error during iteration {iteration}: {str(e)}")
+                print(f"Error type: {type(e)}")
                 import traceback
                 traceback.print_exc()
                 raise
@@ -153,6 +175,7 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
         
     except Exception as e:
         print(f"Error in get_V: {str(e)}")
+        print(f"Error type: {type(e)}")
         import traceback
         traceback.print_exc()
         raise 
