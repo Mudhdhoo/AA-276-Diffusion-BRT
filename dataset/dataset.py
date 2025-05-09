@@ -13,6 +13,10 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 
+# Set multiprocessing start method to 'spawn' to avoid JAX threading issues
+import multiprocessing
+multiprocessing.set_start_method('spawn', force=True)
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -26,7 +30,6 @@ import tempfile
 from pathlib import Path
 import concurrent.futures
 from functools import partial
-import multiprocessing
 
 from dataset.config import (
     N_POINTS, T, DEFAULT_NUM_OBSTACLES,
