@@ -62,9 +62,12 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
     y = grid.states[..., 1]
     
     # Get signed distances for the x, y coordinates
+    print("Computing failure set...")
     failure_set = env.get_signed_distances(x, y)
+    print(f"Failure set shape: {failure_set.shape}")
 
     # Create solver settings
+    print("Creating solver settings...")
     solver_settings = hj.SolverSettings.with_accuracy(
         'very_high',
         hamiltonian_postprocessor=hj.solver.backwards_reachable_tube
@@ -81,7 +84,17 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
             print(f"\nComputing value function with time horizon: {current_times[-1]:.2f}")
             print(f"Grid shape: {grid.states.shape}")
             print(f"Time points: {len(current_times)}")
+            
+            # Print memory info before solve
+            try:
+                nvidia_smi = subprocess.check_output(['nvidia-smi', '--query-gpu=memory.used,memory.total', '--format=csv,noheader,nounits'])
+                print(f"GPU Memory Info (before solve):\n{nvidia_smi.decode()}")
+            except:
+                print("Could not get GPU memory info")
+            
+            print("Starting hj.solve...")
             values = hj.solve(solver_settings, dynamics, grid, current_times, failure_set, progress_bar=True)
+            print("Finished hj.solve")
             
             # Check convergence using JIT-compiled function
             max_change, converged = check_convergence(values)
@@ -97,6 +110,9 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
                 new_num_points = len(current_times) * 2  # Double the number of points
                 new_times = jnp.linspace(0, new_end_time, new_num_points)
                 current_times = new_times
+    except Exception as e:
+        print(f"Error during computation: {str(e)}")
+        raise
     finally:
         # Clean up JAX resources
         jax.clear_caches()
