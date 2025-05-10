@@ -59,6 +59,17 @@ if check_gpu; then
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         install_gpu
         echo "GPU setup complete!"
+        
+        # Configure JAX to use GPU
+        python3 -c "
+import os
+os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+os.environ['XLA_PYTHON_CLIENT_ALLOCATOR'] = 'platform'
+import jax
+print('JAX version:', jax.__version__)
+print('JAX devices:', jax.devices())
+print('JAX default device:', jax.default_backend())
+"
     else
         install_cpu
         echo "CPU setup complete!"

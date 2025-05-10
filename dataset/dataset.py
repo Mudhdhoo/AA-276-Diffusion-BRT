@@ -70,7 +70,7 @@ def create_environment_grid(env, grid):
         grid: Grid object for discretization
         
     Returns:
-        numpy.ndarray: Binary grid where 1 represents obstacles and 0 represents free space
+        jax.numpy.ndarray: Binary grid where 1 represents obstacles and 0 represents free space
     """
     # Extract x, y coordinates from the grid states
     x = grid.states[..., 0]
@@ -81,7 +81,7 @@ def create_environment_grid(env, grid):
     
     # Convert signed distances to binary grid (1 for obstacles, 0 for free space)
     # Negative values indicate inside obstacles
-    binary_grid = (signed_distances <= 0).astype(np.float32)
+    binary_grid = jnp.where(signed_distances <= 0, 1.0, 0.0)
     
     return binary_grid
 
@@ -104,7 +104,9 @@ def process_sample(sample_id, output_dir, key):
     # Create and setup environment
     print(f"Creating environment for sample {sample_id}")
     env = AirplaneObstacleEnvironment()
-    env.set_random_obstacles(DEFAULT_NUM_OBSTACLES, key=key)
+    # Randomly add -1 to 1 number of obstacles
+    num_obstacles = DEFAULT_NUM_OBSTACLES + jax.random.randint(key, (1,), -1, 2)
+    env.set_random_obstacles(num_obstacles, key=key)
     
     # Save environment plot
     print(f"Saving environment plot for sample {sample_id}")
@@ -123,7 +125,8 @@ def process_sample(sample_id, output_dir, key):
     # Create and save environment grid
     print(f"Creating environment grid for sample {sample_id}")
     env_grid = create_environment_grid(env, grid)
-    np.save(os.path.join(sample_dir, ENVIRONMENT_GRID_NAME), env_grid)
+    # Move to CPU only when saving
+    np.save(os.path.join(sample_dir, ENVIRONMENT_GRID_NAME), jax.device_get(env_grid))
     
     initial_times = jnp.linspace(0, T, N_POINTS)
     dynamics = AirplaneDynamics()
@@ -153,7 +156,8 @@ def process_sample(sample_id, output_dir, key):
     
     # Save value function data (only contains last two timesteps when converged)
     print(f"Saving value function for sample {sample_id}")
-    np.save(os.path.join(sample_dir, VALUE_FUNCTION_NAME), V)
+    # Move to CPU only when saving
+    np.save(os.path.join(sample_dir, VALUE_FUNCTION_NAME), jax.device_get(V))
     
     print(f"Completed processing sample {sample_id}")
     return result

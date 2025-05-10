@@ -11,6 +11,23 @@ import hj_reachability as hj
 from tqdm import tqdm
 from .config import CONVERGENCE_THRESHOLD, MAX_TIME
 
+# Enable JIT compilation for better GPU performance
+@jax.jit
+def check_convergence(values):
+    """Check convergence of value function computation.
+    
+    Args:
+        values: Value function array with shape [time, x, y, theta]
+        
+    Returns:
+        tuple: (max_change, converged) where:
+            - max_change: Maximum change between consecutive time steps
+            - converged: Boolean indicating if convergence was achieved
+    """
+    last_two_steps = values[-2:]
+    max_change = jnp.max(jnp.abs(last_two_steps[1] - last_two_steps[0]))
+    return max_change, max_change < CONVERGENCE_THRESHOLD
+
 def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOLD, max_time=MAX_TIME):
     """Compute the value function with convergence checking.
     
@@ -56,12 +73,10 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
             print(f"\nComputing value function with time horizon: {current_times[-1]:.2f}")
             values = hj.solve(solver_settings, dynamics, grid, current_times, failure_set, progress_bar=True)
             
-            # Check convergence by comparing only the last two time steps
-            last_two_steps = jax.device_get(values[-2:])
-            max_change = np.max(np.abs(last_two_steps[1] - last_two_steps[0]))
+            # Check convergence using JIT-compiled function
+            max_change, converged = check_convergence(values)
             
-            if max_change < convergence_threshold:
-                converged = True
+            if converged:
                 final_time = float(current_times[-1])
                 print(f"Converged with max change: {max_change:.2e} at time {final_time}")
                 # Only keep the last two timesteps
