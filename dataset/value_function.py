@@ -49,6 +49,14 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
             - converged: Boolean indicating if convergence was achieved
             - final_time: The final time horizon used (None if not converged)
     """
+    # Print GPU memory info
+    try:
+        import subprocess
+        nvidia_smi = subprocess.check_output(['nvidia-smi', '--query-gpu=memory.used,memory.total', '--format=csv,noheader,nounits'])
+        print(f"\nGPU Memory Info (before computation):\n{nvidia_smi.decode()}")
+    except:
+        print("Could not get GPU memory info")
+
     # Extract x, y coordinates from the grid states
     x = grid.states[..., 0]
     y = grid.states[..., 1]
@@ -71,6 +79,8 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
         while not converged and current_times[-1] > max_time:  # Check the last time point
             # Solve for current time horizon
             print(f"\nComputing value function with time horizon: {current_times[-1]:.2f}")
+            print(f"Grid shape: {grid.states.shape}")
+            print(f"Time points: {len(current_times)}")
             values = hj.solve(solver_settings, dynamics, grid, current_times, failure_set, progress_bar=True)
             
             # Check convergence using JIT-compiled function
