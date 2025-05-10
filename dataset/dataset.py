@@ -115,6 +115,8 @@ def process_sample(sample_id, output_dir, key):
     Returns:
         Dictionary containing sample results
     """
+    print(f"\nProcessing sample {sample_id + 1}/{NUM_SAMPLES}")
+    
     # Create sample directory
     sample_dir = os.path.join(output_dir, f'{SAMPLE_DIR_PREFIX}{sample_id:03d}')
     os.makedirs(sample_dir, exist_ok=True)
@@ -171,6 +173,7 @@ def process_sample(sample_id, output_dir, key):
     write_result_to_csv(result, os.path.join(output_dir, RESULTS_CSV_NAME))
     
     if not converged or V is None:
+        print(f"Sample {sample_id + 1} did not converge")
         return result
     
     # Save value function data (only contains last two timesteps when converged)
