@@ -51,6 +51,10 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
     """
     print("\nStarting get_V function...")
     
+    # Configure JAX memory management
+    jax.config.update('jax_platform_name', 'gpu')
+    jax.config.update('jax_default_matmul_precision', jax.lax.Precision.HIGHEST)
+    
     # Validate inputs
     print("Validating inputs...")
     print(f"Grid type: {type(grid)}")
@@ -116,6 +120,9 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
             
             print("Starting hj.solve...")
             try:
+                # Clear JAX cache before solve
+                jax.clear_caches()
+                
                 values = hj.solve(solver_settings, dynamics, grid, current_times, failure_set, progress_bar=True)
                 print("Finished hj.solve")
             except Exception as e:
