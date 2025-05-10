@@ -49,6 +49,15 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
             - converged: Boolean indicating if convergence was achieved
             - final_time: The final time horizon used (None if not converged)
     """
+    print("\nStarting get_V function...")
+    
+    # Validate inputs
+    print("Validating inputs...")
+    print(f"Grid type: {type(grid)}")
+    print(f"Grid states shape: {grid.states.shape if hasattr(grid, 'states') else 'No states attribute'}")
+    print(f"Times shape: {times.shape}")
+    print(f"Times range: [{times[0]}, {times[-1]}]")
+    
     # Print GPU memory info
     try:
         import subprocess
@@ -57,21 +66,34 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
     except:
         print("Could not get GPU memory info")
 
+    print("Extracting grid coordinates...")
     # Extract x, y coordinates from the grid states
     x = grid.states[..., 0]
     y = grid.states[..., 1]
+    print(f"x shape: {x.shape}, y shape: {y.shape}")
     
     # Get signed distances for the x, y coordinates
     print("Computing failure set...")
-    failure_set = env.get_signed_distances(x, y)
-    print(f"Failure set shape: {failure_set.shape}")
+    try:
+        failure_set = env.get_signed_distances(x, y)
+        print(f"Failure set shape: {failure_set.shape}")
+        print(f"Failure set type: {type(failure_set)}")
+        print(f"Failure set device: {failure_set.device() if hasattr(failure_set, 'device') else 'No device attribute'}")
+    except Exception as e:
+        print(f"Error computing failure set: {str(e)}")
+        raise
 
     # Create solver settings
     print("Creating solver settings...")
-    solver_settings = hj.SolverSettings.with_accuracy(
-        'very_high',
-        hamiltonian_postprocessor=hj.solver.backwards_reachable_tube
-    )
+    try:
+        solver_settings = hj.SolverSettings.with_accuracy(
+            'very_high',
+            hamiltonian_postprocessor=hj.solver.backwards_reachable_tube
+        )
+        print("Solver settings created successfully")
+    except Exception as e:
+        print(f"Error creating solver settings: {str(e)}")
+        raise
     
     current_times = times
     values = None
@@ -93,8 +115,12 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
                 print("Could not get GPU memory info")
             
             print("Starting hj.solve...")
-            values = hj.solve(solver_settings, dynamics, grid, current_times, failure_set, progress_bar=True)
-            print("Finished hj.solve")
+            try:
+                values = hj.solve(solver_settings, dynamics, grid, current_times, failure_set, progress_bar=True)
+                print("Finished hj.solve")
+            except Exception as e:
+                print(f"Error during hj.solve: {str(e)}")
+                raise
             
             # Check convergence using JIT-compiled function
             max_change, converged = check_convergence(values)
