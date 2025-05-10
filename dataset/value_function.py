@@ -49,55 +49,22 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
             - converged: Boolean indicating if convergence was achieved
             - final_time: The final time horizon used (None if not converged)
     """
-    print("\nStarting get_V function...")
-    
     # Configure JAX memory management
     jax.config.update('jax_platform_name', 'gpu')
     jax.config.update('jax_default_matmul_precision', jax.lax.Precision.HIGHEST)
     
-    # Validate inputs
-    print("Validating inputs...")
-    print(f"Grid type: {type(grid)}")
-    print(f"Grid states shape: {grid.states.shape if hasattr(grid, 'states') else 'No states attribute'}")
-    print(f"Times shape: {times.shape}")
-    print(f"Times range: [{times[0]}, {times[-1]}]")
-    
-    # Print GPU memory info
-    try:
-        import subprocess
-        nvidia_smi = subprocess.check_output(['nvidia-smi', '--query-gpu=memory.used,memory.total', '--format=csv,noheader,nounits'])
-        print(f"\nGPU Memory Info (before computation):\n{nvidia_smi.decode()}")
-    except:
-        print("Could not get GPU memory info")
-
-    print("Extracting grid coordinates...")
     # Extract x, y coordinates from the grid states
     x = grid.states[..., 0]
     y = grid.states[..., 1]
-    print(f"x shape: {x.shape}, y shape: {y.shape}")
     
     # Get signed distances for the x, y coordinates
-    print("Computing failure set...")
-    try:
-        failure_set = env.get_signed_distances(x, y)
-        print(f"Failure set shape: {failure_set.shape}")
-        print(f"Failure set type: {type(failure_set)}")
-        print(f"Failure set device: {failure_set.device() if hasattr(failure_set, 'device') else 'No device attribute'}")
-    except Exception as e:
-        print(f"Error computing failure set: {str(e)}")
-        raise
+    failure_set = env.get_signed_distances(x, y)
 
     # Create solver settings
-    print("Creating solver settings...")
-    try:
-        solver_settings = hj.SolverSettings.with_accuracy(
-            'very_high',
-            hamiltonian_postprocessor=hj.solver.backwards_reachable_tube
-        )
-        print("Solver settings created successfully")
-    except Exception as e:
-        print(f"Error creating solver settings: {str(e)}")
-        raise
+    solver_settings = hj.SolverSettings.with_accuracy(
+        'very_high',
+        hamiltonian_postprocessor=hj.solver.backwards_reachable_tube
+    )
     
     current_times = times
     values = None
@@ -107,34 +74,13 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
     try:
         while not converged and current_times[-1] > max_time:  # Check the last time point
             # Solve for current time horizon
-            print(f"\nComputing value function with time horizon: {current_times[-1]:.2f}")
-            print(f"Grid shape: {grid.states.shape}")
-            print(f"Time points: {len(current_times)}")
-            
-            # Print memory info before solve
-            try:
-                nvidia_smi = subprocess.check_output(['nvidia-smi', '--query-gpu=memory.used,memory.total', '--format=csv,noheader,nounits'])
-                print(f"GPU Memory Info (before solve):\n{nvidia_smi.decode()}")
-            except:
-                print("Could not get GPU memory info")
-            
-            print("Starting hj.solve...")
-            try:
-                # Clear JAX cache before solve
-                # jax.clear_caches()
-                
-                values = hj.solve(solver_settings, dynamics, grid, current_times, failure_set, progress_bar=True)
-                print("Finished hj.solve")
-            except Exception as e:
-                print(f"Error during hj.solve: {str(e)}")
-                raise
+            values = hj.solve(solver_settings, dynamics, grid, current_times, failure_set, progress_bar=True)
             
             # Check convergence using JIT-compiled function
             max_change, converged = check_convergence(values)
             
             if converged:
                 final_time = float(current_times[-1])
-                print(f"Converged with max change: {max_change:.2e} at time {final_time}")
                 # Only keep the last two timesteps
                 values = values[-2:]
             else:
@@ -143,9 +89,6 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
                 new_num_points = len(current_times) * 2  # Double the number of points
                 new_times = jnp.linspace(0, new_end_time, new_num_points)
                 current_times = new_times
-    except Exception as e:
-        print(f"Error during computation: {str(e)}")
-        raise
     finally:
         # Clean up JAX resources
         jax.clear_caches()

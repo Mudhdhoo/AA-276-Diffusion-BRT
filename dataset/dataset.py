@@ -27,8 +27,19 @@ from dataset.config import (
     N_POINTS, T, DEFAULT_NUM_OBSTACLES,
     OUTPUT_DIR, SAMPLE_DIR_PREFIX, ENVIRONMENT_PLOT_NAME,
     VALUE_FUNCTION_NAME, RESULTS_CSV_NAME, NUM_SAMPLES,
-    GLOBAL_SEED, CSV_COLUMNS, ENVIRONMENT_GRID_NAME
+    GLOBAL_SEED, ENVIRONMENT_GRID_NAME
 )
+
+# Define CSV columns with clearer names
+CSV_COLUMNS = [
+    'sample_id',
+    'seed',
+    'converged',
+    'computation_time_seconds',  # Time taken for script to run until convergence
+    'simulation_time_horizon',   # Actual time horizon in HJ reachability simulation
+    'timestamp'
+]
+
 from dataset.environment import AirplaneObstacleEnvironment
 from dataset.dynamics import AirplaneDynamics
 from dataset.value_function import get_V
@@ -57,8 +68,8 @@ def write_result_to_csv(result, csv_path):
             result['sample_id'],
             result['seed'],
             result['converged'],
-            result['convergence_time'],
-            result.get('final_time_horizon', None),
+            result['computation_time_seconds'],
+            result.get('simulation_time_horizon', None),
             result['timestamp']
         ])
 
@@ -135,14 +146,14 @@ def process_sample(sample_id, output_dir, key):
     print(f"Computing value function for sample {sample_id}")
     start_time = time.time()
     V, converged, final_time = get_V(env, dynamics, grid, initial_times)
-    convergence_time = time.time() - start_time
+    computation_time = time.time() - start_time
     
     result = {
         'sample_id': sample_id,
         'seed': int(jax.random.fold_in(key, 0)[0]),
         'converged': converged,
-        'convergence_time': convergence_time,
-        'final_time_horizon': float(final_time) if converged else None,
+        'computation_time_seconds': computation_time,
+        'simulation_time_horizon': float(final_time) if converged else None,
         'timestamp': datetime.now().isoformat()
     }
     
