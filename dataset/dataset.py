@@ -37,6 +37,10 @@ CSV_COLUMNS = [
     'converged',
     'computation_time_seconds',  # Time taken for script to run until convergence
     'simulation_time_horizon',   # Actual time horizon in HJ reachability simulation
+    'num_obstacles',            # Number of obstacles in the environment
+    'env_grid_path',           # Path to the environment grid file
+    'value_function_path',     # Path to the value function file
+    'env_plot_path',          # Path to the environment visualization
     'timestamp'
 ]
 
@@ -70,6 +74,10 @@ def write_result_to_csv(result, csv_path):
             result['converged'],
             result['computation_time_seconds'],
             result.get('simulation_time_horizon', None),
+            result['num_obstacles'],
+            result['env_grid_path'],
+            result.get('value_function_path', None),  # None if not converged
+            result['env_plot_path'],
             result['timestamp']
         ])
 
@@ -119,9 +127,14 @@ def process_sample(sample_id, output_dir, key):
     num_obstacles = DEFAULT_NUM_OBSTACLES + jax.random.randint(key, (1,), -1, 2)
     env.set_random_obstacles(num_obstacles, key=key)
     
+    # Define file paths
+    env_plot_path = os.path.join(sample_dir, ENVIRONMENT_PLOT_NAME)
+    env_grid_path = os.path.join(sample_dir, ENVIRONMENT_GRID_NAME)
+    value_function_path = os.path.join(sample_dir, VALUE_FUNCTION_NAME)
+    
     # Save environment plot
     print(f"Saving environment plot for sample {sample_id}")
-    save_environment_plot(env, os.path.join(sample_dir, ENVIRONMENT_PLOT_NAME))
+    save_environment_plot(env, env_plot_path)
     
     # Setup grid and dynamics
     print(f"Setting up grid and dynamics for sample {sample_id}")
@@ -137,7 +150,7 @@ def process_sample(sample_id, output_dir, key):
     print(f"Creating environment grid for sample {sample_id}")
     env_grid = create_environment_grid(env, grid)
     # Move to CPU only when saving
-    np.save(os.path.join(sample_dir, ENVIRONMENT_GRID_NAME), jax.device_get(env_grid))
+    np.save(env_grid_path, jax.device_get(env_grid))
     
     initial_times = jnp.linspace(0, T, N_POINTS)
     dynamics = AirplaneDynamics()
@@ -154,6 +167,9 @@ def process_sample(sample_id, output_dir, key):
         'converged': converged,
         'computation_time_seconds': computation_time,
         'simulation_time_horizon': float(final_time) if converged else None,
+        'num_obstacles': int(num_obstacles[0]),  # Convert from JAX array to int
+        'env_grid_path': env_grid_path,
+        'env_plot_path': env_plot_path,
         'timestamp': datetime.now().isoformat()
     }
     
@@ -168,7 +184,8 @@ def process_sample(sample_id, output_dir, key):
     # Save value function data (only contains last two timesteps when converged)
     print(f"Saving value function for sample {sample_id}")
     # Move to CPU only when saving
-    np.save(os.path.join(sample_dir, VALUE_FUNCTION_NAME), jax.device_get(V))
+    np.save(value_function_path, jax.device_get(V))
+    result['value_function_path'] = value_function_path
     
     print(f"Completed processing sample {sample_id}")
     return result
