@@ -115,13 +115,11 @@ def process_sample(sample_id, output_dir, key):
     Returns:
         Dictionary containing sample results
     """
-    print(f"Starting to process sample {sample_id}")
     # Create sample directory
     sample_dir = os.path.join(output_dir, f'{SAMPLE_DIR_PREFIX}{sample_id:03d}')
     os.makedirs(sample_dir, exist_ok=True)
     
     # Create and setup environment
-    print(f"Creating environment for sample {sample_id}")
     env = AirplaneObstacleEnvironment()
     # Randomly add -1 to 1 number of obstacles
     num_obstacles = DEFAULT_NUM_OBSTACLES + jax.random.randint(key, (1,), -1, 2)
@@ -133,11 +131,9 @@ def process_sample(sample_id, output_dir, key):
     value_function_path = os.path.join(sample_dir, VALUE_FUNCTION_NAME)
     
     # Save environment plot
-    print(f"Saving environment plot for sample {sample_id}")
     save_environment_plot(env, env_plot_path)
     
     # Setup grid and dynamics
-    print(f"Setting up grid and dynamics for sample {sample_id}")
     grid = hj.Grid.from_lattice_parameters_and_boundary_conditions(
         domain=hj.sets.Box(
             jnp.array([0.0, 0.0, -jnp.pi]),
@@ -147,7 +143,6 @@ def process_sample(sample_id, output_dir, key):
     )
     
     # Create and save environment grid
-    print(f"Creating environment grid for sample {sample_id}")
     env_grid = create_environment_grid(env, grid)
     # Move to CPU only when saving
     np.save(env_grid_path, jax.device_get(env_grid))
@@ -156,7 +151,6 @@ def process_sample(sample_id, output_dir, key):
     dynamics = AirplaneDynamics()
     
     # Compute value function and measure time
-    print(f"Computing value function for sample {sample_id}")
     start_time = time.time()
     V, converged, final_time = get_V(env, dynamics, grid, initial_times)
     computation_time = time.time() - start_time
@@ -174,20 +168,16 @@ def process_sample(sample_id, output_dir, key):
     }
     
     # Write result to CSV file
-    print(f"Writing results for sample {sample_id}")
     write_result_to_csv(result, os.path.join(output_dir, RESULTS_CSV_NAME))
     
     if not converged or V is None:
-        print(f"Sample {sample_id} did not converge")
         return result
     
     # Save value function data (only contains last two timesteps when converged)
-    print(f"Saving value function for sample {sample_id}")
     # Move to CPU only when saving
     np.save(value_function_path, jax.device_get(V))
     result['value_function_path'] = value_function_path
     
-    print(f"Completed processing sample {sample_id}")
     return result
 
 def main():
@@ -207,13 +197,10 @@ def main():
         keys.append(subkey)
     
     # Process samples sequentially
-    print(f"Processing {NUM_SAMPLES} samples sequentially")
     results = []
     for sample_id in tqdm(range(NUM_SAMPLES), desc="Processing samples", unit="sample"):
         result = process_sample(sample_id, output_dir, keys[sample_id])
         results.append(result)
-    
-    print(f"\nCompleted processing {len(results)} samples")
 
 if __name__ == "__main__":
     main()

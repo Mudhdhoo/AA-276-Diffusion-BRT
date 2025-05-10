@@ -48,7 +48,6 @@ def plot_3d_value_evolution(values, grid, times, save_path='outputs/3d_value_evo
         indices = np.linspace(0, len(times)-1, max_frames, dtype=int)
         values = values[indices]
         times = times[indices]
-        print(f"Downsampled time series from {len(times)} to {max_frames} frames")
     
     # Create a darker version of RdYlGn
     colors = [
@@ -179,7 +178,6 @@ def plot_3d_value_evolution(values, grid, times, save_path='outputs/3d_value_evo
         )
     
     plt.close()
-    print(f'Saved 3D safe set animation to: {save_path}')
 
 def plot_value_and_zero_level(values, grid, ax=None, figsize=(10, 8), title='Value Function'):
     """
