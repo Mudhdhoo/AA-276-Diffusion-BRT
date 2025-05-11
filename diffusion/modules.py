@@ -1,7 +1,8 @@
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
+from typing import Union
 
 
 class EMA:
@@ -76,6 +77,61 @@ class DoubleConv(nn.Module):
             return self.double_conv(x)
 
 
+class FiLM_DoubleConv(nn.Module):
+    def __init__(self, in_channels, out_channels, cond_dim, mid_channels=None, residual=False, n_groups=8):
+        super().__init__()
+        self.residual = residual
+        if not mid_channels:
+            mid_channels = out_channels
+            
+        self.conv1 = nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False)
+        self.norm1 = nn.GroupNorm(n_groups, mid_channels)
+        self.act1 = nn.GELU()
+        
+        self.conv2 = nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.norm2 = nn.GroupNorm(n_groups, out_channels)
+        
+        # FiLM conditioning layer - predicts per-channel scale and bias
+        self.cond_encoder = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(cond_dim, out_channels * 2)
+        )
+        
+        # Make sure dimensions are compatible for residual connection
+        self.residual_conv = nn.Conv2d(in_channels, out_channels, 1) \
+            if in_channels != out_channels else nn.Identity()
+        
+        self.out_channels = out_channels
+        
+    def forward(self, x, cond):
+        '''
+        x: [batch_size, in_channels, height, width]
+        cond: [batch_size, cond_dim]
+        '''
+        # First convolution block
+        h = self.conv1(x)
+        h = self.norm1(h)
+        h = self.act1(h)
+        
+        # Second convolution block
+        h = self.conv2(h)
+        h = self.norm2(h)
+        
+        # Apply FiLM conditioning
+        film_params = self.cond_encoder(cond)
+        film_params = film_params.view(film_params.size(0), 2, self.out_channels, 1, 1)
+        scale = film_params[:, 0]  # [batch, out_channels, 1, 1]
+        bias = film_params[:, 1]   # [batch, out_channels, 1, 1]
+        
+        h = scale * h + bias
+        
+        # Residual connection
+        if self.residual:
+            h = F.gelu(h + self.residual_conv(x))
+        
+        return h
+
+
 class Down(nn.Module):
     def __init__(self, in_channels, out_channels, emb_dim=256):
         super().__init__()
@@ -97,6 +153,20 @@ class Down(nn.Module):
         x = self.maxpool_conv(x)
         emb = self.emb_layer(t)[:, :, None, None].repeat(1, 1, x.shape[-2], x.shape[-1])
         return x + emb
+
+
+class FiLM_Down(nn.Module):
+    def __init__(self, in_channels, out_channels, cond_dim=256, n_groups=8):
+        super().__init__()
+        self.maxpool = nn.MaxPool2d(2)
+        self.res_block1 = FiLM_DoubleConv(in_channels, in_channels, cond_dim, residual=True, n_groups=n_groups)
+        self.res_block2 = FiLM_DoubleConv(in_channels, out_channels, cond_dim, n_groups=n_groups)
+
+    def forward(self, x, cond):
+        x = self.maxpool(x)
+        x = self.res_block1(x, cond)
+        x = self.res_block2(x, cond)
+        return x
 
 
 class Up(nn.Module):
@@ -123,6 +193,21 @@ class Up(nn.Module):
         x = self.conv(x)
         emb = self.emb_layer(t)[:, :, None, None].repeat(1, 1, x.shape[-2], x.shape[-1])
         return x + emb
+
+
+class FiLM_Up(nn.Module):
+    def __init__(self, in_channels, out_channels, cond_dim=256, n_groups=8):
+        super().__init__()
+        self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+        self.res_block1 = FiLM_DoubleConv(in_channels, in_channels, cond_dim, residual=True, n_groups=n_groups)
+        self.res_block2 = FiLM_DoubleConv(in_channels, out_channels, cond_dim, mid_channels=in_channels//2, n_groups=n_groups)
+
+    def forward(self, x, skip_x, cond):
+        x = self.up(x)
+        x = torch.cat([skip_x, x], dim=1)
+        x = self.res_block1(x, cond)
+        x = self.res_block2(x, cond)
+        return x
 
 
 class UNet(nn.Module):
@@ -253,11 +338,121 @@ class UNet_conditional(nn.Module):
         return output
 
 
+class UNet_FiLM(nn.Module):
+    def __init__(self, c_in=3, c_out=3, time_dim=256, cond_dim=None, n_groups=8, device="cuda"):
+        super().__init__()
+        self.device = device
+        self.time_dim = time_dim
+        
+        # Set cond_dim equal to time_dim if not provided
+        if cond_dim is None:
+            cond_dim = time_dim
+        
+        # Initial feature extraction without conditioning
+        self.inc = DoubleConv(c_in, 64)
+        
+        # Time embedding
+        self.time_encoder = nn.Sequential(
+            SinusoidalPosEmb(time_dim),
+            nn.Linear(time_dim, time_dim * 4),
+            nn.SiLU(),
+            nn.Linear(time_dim * 4, time_dim),
+        )
+        
+        # Combine time embedding with condition
+        self.combined_cond_dim = time_dim + cond_dim
+        
+        # Downsampling path
+        self.down1 = FiLM_Down(64, 128, self.combined_cond_dim, n_groups=n_groups)
+        self.sa1 = SelfAttention(128, 32)
+        self.down2 = FiLM_Down(128, 256, self.combined_cond_dim, n_groups=n_groups)
+        self.sa2 = SelfAttention(256, 16)
+        self.down3 = FiLM_Down(256, 256, self.combined_cond_dim, n_groups=n_groups)
+        self.sa3 = SelfAttention(256, 8)
+
+        # Bottleneck
+        self.bot1 = FiLM_DoubleConv(256, 512, self.combined_cond_dim, n_groups=n_groups)
+        self.bot2 = FiLM_DoubleConv(512, 512, self.combined_cond_dim, n_groups=n_groups)
+        self.bot3 = FiLM_DoubleConv(512, 256, self.combined_cond_dim, n_groups=n_groups)
+
+        # Upsampling path
+        self.up1 = FiLM_Up(512, 128, self.combined_cond_dim, n_groups=n_groups)
+        self.sa4 = SelfAttention(128, 16)
+        self.up2 = FiLM_Up(256, 64, self.combined_cond_dim, n_groups=n_groups)
+        self.sa5 = SelfAttention(64, 32)
+        self.up3 = FiLM_Up(128, 64, self.combined_cond_dim, n_groups=n_groups)
+        self.sa6 = SelfAttention(64, 64)
+        
+        # Output convolution
+        self.outc = nn.Conv2d(64, c_out, kernel_size=1)
+
+    def forward(self, x, t, cond=None):
+        """
+        x: [B, C, H, W] - Input image
+        t: [B] - Diffusion timestep
+        cond: [B, cond_dim] - Conditional input (e.g., grid conditions)
+        """
+        # Encode timestep
+        t = t.unsqueeze(-1).type(torch.float)
+        time_emb = self.time_encoder(t)
+        
+        # Combine time embedding with condition
+        if cond is None:
+            cond = torch.zeros(x.shape[0], self.combined_cond_dim - self.time_dim, device=self.device)
+            
+        combined_cond = torch.cat([time_emb, cond], dim=-1)
+            
+        # Initial convolution
+        x1 = self.inc(x)
+        
+        # Downsampling
+        x2 = self.down1(x1, combined_cond)
+        x2 = self.sa1(x2)
+        x3 = self.down2(x2, combined_cond)
+        x3 = self.sa2(x3)
+        x4 = self.down3(x3, combined_cond)
+        x4 = self.sa3(x4)
+
+        # Bottleneck
+        x4 = self.bot1(x4, combined_cond)
+        x4 = self.bot2(x4, combined_cond)
+        x4 = self.bot3(x4, combined_cond)
+
+        # Upsampling
+        x = self.up1(x4, x3, combined_cond)
+        x = self.sa4(x)
+        x = self.up2(x, x2, combined_cond)
+        x = self.sa5(x)
+        x = self.up3(x, x1, combined_cond)
+        x = self.sa6(x)
+        
+        # Output
+        output = self.outc(x)
+        return output
+
+
+# Sinusoidal position embedding for diffusion step
+class SinusoidalPosEmb(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, x):
+        device = x.device
+        half_dim = self.dim // 2
+        emb = math.log(10000) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, device=device) * -emb)
+        emb = x[:, None] * emb[None, :]
+        emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
+        return emb
+
+
 if __name__ == '__main__':
     # net = UNet(device="cpu")
-    net = UNet_conditional(num_classes=10, device="cpu")
+    # net = UNet_conditional(num_classes=10, device="cpu")
+    net = UNet_FiLM(c_in=3, c_out=3, time_dim=256, cond_dim=16, device="cpu")
     print(sum([p.numel() for p in net.parameters()]))
     x = torch.randn(3, 3, 64, 64)
     t = x.new_tensor([500] * x.shape[0]).long()
-    y = x.new_tensor([1] * x.shape[0]).long()
-    print(net(x, t, y).shape)
+    cond = torch.randn(3, 16)  # Example grid condition encoded as a vector
+    print(net(x, t, cond).shape)
