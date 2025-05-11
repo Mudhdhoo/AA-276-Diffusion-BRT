@@ -12,6 +12,9 @@ class ValueFunctionDataset(Dataset):
             results_path (str): Path to the results.csv file containing paths to value functions
                               and environment grids
         """
+        # Get the directory containing the results file
+        self.results_dir = os.path.dirname(os.path.abspath(results_path))
+        
         # Read the results file
         results = np.genfromtxt(results_path, delimiter=',', names=True, dtype=None, encoding='utf-8')
         
@@ -19,6 +22,10 @@ class ValueFunctionDataset(Dataset):
         converged_mask = results['converged'] == True
         self.value_function_paths = results['value_function_path'][converged_mask]
         self.environment_grid_paths = results['env_grid_path'][converged_mask]
+        
+        # Convert paths to be relative to results directory
+        self.value_function_paths = [os.path.join(self.results_dir, os.path.basename(path)) for path in self.value_function_paths]
+        self.environment_grid_paths = [os.path.join(self.results_dir, os.path.basename(path)) for path in self.environment_grid_paths]
         
         # Load the first sample to get dimensions
         first_value_function = np.load(self.value_function_paths[0])
