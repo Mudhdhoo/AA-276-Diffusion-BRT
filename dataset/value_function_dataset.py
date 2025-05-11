@@ -2,6 +2,7 @@ import torch
 from torch.utils.data import Dataset
 import numpy as np
 import os
+import pandas as pd
 
 class ValueFunctionDataset(Dataset):
     def __init__(self, results_path):
@@ -12,20 +13,31 @@ class ValueFunctionDataset(Dataset):
             results_path (str): Path to the results.csv file containing paths to value functions
                               and environment grids
         """
-        # Get the directory containing the results file
-        self.results_dir = os.path.dirname(os.path.abspath(results_path))
+        # Get the project root directory
+        self.project_root = os.path.abspath(os.path.join(os.path.dirname(results_path), "../.."))
         
-        # Read the results file
-        results = np.genfromtxt(results_path, delimiter=',', names=True, dtype=None, encoding='utf-8')
+        # Read the results file using pandas
+        results = pd.read_csv(results_path)
         
         # Filter for converged samples
         converged_mask = results['converged'] == True
-        self.value_function_paths = results['value_function_path'][converged_mask]
-        self.environment_grid_paths = results['env_grid_path'][converged_mask]
+        self.environment_grid_paths = results['env_grid_path'][converged_mask].values
         
-        # Convert paths to be relative to results directory
-        self.value_function_paths = [os.path.join(self.results_dir, os.path.basename(path)) for path in self.value_function_paths]
-        self.environment_grid_paths = [os.path.join(self.results_dir, os.path.basename(path)) for path in self.environment_grid_paths]
+        # Convert absolute paths to relative paths from project root
+        def make_relative(path):
+            # Extract the part after 'outputs/'
+            parts = path.split('outputs/')
+            if len(parts) > 1:
+                return os.path.join(self.project_root, 'outputs', parts[1])
+            return path
+            
+        self.environment_grid_paths = [make_relative(path) for path in self.environment_grid_paths]
+        
+        # Create value function paths by replacing 'environment_grid.npy' with 'value_function.npy'
+        self.value_function_paths = [
+            path.replace('environment_grid.npy', 'value_function.npy')
+            for path in self.environment_grid_paths
+        ]
         
         # Load the first sample to get dimensions
         first_value_function = np.load(self.value_function_paths[0])

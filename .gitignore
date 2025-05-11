@@ -51,3 +51,5 @@ Thumbs.db
 logs/ 
 
 test.ipynb
+
+wandb/

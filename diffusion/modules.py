@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 from typing import Union
+from loguru import logger
 
 
 class EMA:
@@ -338,11 +339,49 @@ class UNet_conditional(nn.Module):
         return output
 
 
+class SaintPeter(nn.Module):
+    def __init__(self, grid_size, cond_dim):
+        super().__init__()
+        self.grid_size = grid_size
+        self.cond_dim = cond_dim
+        
+        # CNN layers to process the grid with downpooling
+        self.conv_layers = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, padding=1),
+            nn.GroupNorm(8, 32),
+            nn.GELU(),
+            nn.MaxPool2d(2),  # First downpooling
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.GroupNorm(8, 64),
+            nn.GELU(),
+            nn.MaxPool2d(2),  # Second downpooling
+        )
+        
+        # Calculate the size after convolutions and downpooling
+        reduced_size = grid_size // 4  # Two maxpool layers reduce size by factor of 4
+        conv_output_size = 64 * reduced_size * reduced_size
+        
+        # Final projection to cond_dim
+        self.projection = nn.Sequential(
+            nn.Linear(conv_output_size, 512),
+            nn.GELU(),
+            nn.Linear(512, cond_dim)
+        )
+        
+    def forward(self, x):
+        # x: [B, 1, grid_size, grid_size]
+        x = self.conv_layers(x)
+        x = x.view(x.size(0), -1)  # Flatten
+        x = self.projection(x)
+        return x
+
+
 class UNet_FiLM(nn.Module):
-    def __init__(self, c_in=3, c_out=3, time_dim=256, cond_dim=None, n_groups=8, device="cuda"):
+    def __init__(self, c_in=3, c_out=3, time_dim=256, grid_size=101, cond_dim=None, n_groups=8, device="cuda"):
         super().__init__()
         self.device = device
         self.time_dim = time_dim
+        self.grid_size = grid_size
         
         # Set cond_dim equal to time_dim if not provided
         if cond_dim is None:
@@ -359,16 +398,19 @@ class UNet_FiLM(nn.Module):
             nn.Linear(time_dim * 4, time_dim),
         )
         
+        # Grid projection module
+        self.grid_projection = SaintPeter(grid_size=grid_size, cond_dim=cond_dim)
+        
         # Combine time embedding with condition
         self.combined_cond_dim = time_dim + cond_dim
         
         # Downsampling path
         self.down1 = FiLM_Down(64, 128, self.combined_cond_dim, n_groups=n_groups)
-        self.sa1 = SelfAttention(128, 32)
+        self.sa1 = SelfAttention(128, self.grid_size//2)
         self.down2 = FiLM_Down(128, 256, self.combined_cond_dim, n_groups=n_groups)
-        self.sa2 = SelfAttention(256, 16)
+        self.sa2 = SelfAttention(256, self.grid_size//4)
         self.down3 = FiLM_Down(256, 256, self.combined_cond_dim, n_groups=n_groups)
-        self.sa3 = SelfAttention(256, 8)
+        self.sa3 = SelfAttention(256, self.grid_size//8)
 
         # Bottleneck
         self.bot1 = FiLM_DoubleConv(256, 512, self.combined_cond_dim, n_groups=n_groups)
@@ -377,11 +419,11 @@ class UNet_FiLM(nn.Module):
 
         # Upsampling path
         self.up1 = FiLM_Up(512, 128, self.combined_cond_dim, n_groups=n_groups)
-        self.sa4 = SelfAttention(128, 16)
+        self.sa4 = SelfAttention(128, self.grid_size//8*2)
         self.up2 = FiLM_Up(256, 64, self.combined_cond_dim, n_groups=n_groups)
-        self.sa5 = SelfAttention(64, 32)
+        self.sa5 = SelfAttention(64, self.grid_size//8*4)   
         self.up3 = FiLM_Up(128, 64, self.combined_cond_dim, n_groups=n_groups)
-        self.sa6 = SelfAttention(64, 64)
+        self.sa6 = SelfAttention(64, self.grid_size//8*8)
         
         # Output convolution
         self.outc = nn.Conv2d(64, c_out, kernel_size=1)
@@ -390,18 +432,23 @@ class UNet_FiLM(nn.Module):
         """
         x: [B, C, H, W] - Input image
         t: [B] - Diffusion timestep
-        cond: [B, cond_dim] - Conditional input (e.g., grid conditions)
+        cond: [B, 1, H, W] - Grid condition
         """
         # Encode timestep
         t = t.unsqueeze(-1).type(torch.float)
-        time_emb = self.time_encoder(t)
+        time_emb = self.time_encoder(t)  # [B, 1, time_dim]
+        time_emb = time_emb.squeeze(1)  # [B, time_dim]
         
-        # Combine time embedding with condition
+        # Project grid condition
         if cond is None:
-            cond = torch.zeros(x.shape[0], self.combined_cond_dim - self.time_dim, device=self.device)
+            cond = torch.zeros(x.shape[0], 1, x.shape[2], x.shape[3], device=self.device)
             
-        combined_cond = torch.cat([time_emb, cond], dim=-1)
+        logger.info(f"Dimensions of cond: {cond.shape}")
+        cond = self.grid_projection(cond)  # [B, cond_dim]
             
+        # Combine time embedding with condition
+        combined_cond = torch.cat([time_emb, cond], dim=-1)  # [B, time_dim + cond_dim]
+
         # Initial convolution
         x1 = self.inc(x)
         
