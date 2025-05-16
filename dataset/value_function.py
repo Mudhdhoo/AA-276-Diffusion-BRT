@@ -52,13 +52,7 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
     # Configure JAX memory management
     jax.config.update('jax_platform_name', 'gpu')
     jax.config.update('jax_default_matmul_precision', jax.lax.Precision.HIGHEST)
-    
-    #Print if using gpu:
-    if jax.device_get(jax.devices()[0].backend_name) == 'gpu':
-        print("Using GPU for value function computation")
-    else:
-        print("Using CPU for value function computation")
-    
+        
     # Extract x, y coordinates from the grid states
     x = grid.states[..., 0]
     y = grid.states[..., 1]
