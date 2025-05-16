@@ -346,3 +346,38 @@ def save_environment_plot(env, save_path, n_points=101):
     plot_environment(ax, env)
     plt.savefig(save_path)
     plt.close()
+
+
+def plot_value_function(tensor, threshold=0):
+    # Create figure and 3D axis
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Get coordinates where values are negative
+    x_indices, y_indices, z_indices = np.where(tensor < threshold)
+    values = tensor[x_indices, y_indices, z_indices]
+    
+    # Normalize the values for coloring
+    if len(values) > 0:
+        norm = plt.Normalize(values.min(), threshold)
+        colors = plt.cm.coolwarm(norm(values))
+        
+        # Plot scatter points for negative values
+        scatter = ax.scatter(x_indices, y_indices, z_indices, 
+                   c=values, cmap='coolwarm', alpha=0.8, 
+                   s=50, edgecolor='none')
+        
+        # Add a colorbar
+        cbar = plt.colorbar(scatter, ax=ax, shrink=0.6)
+        cbar.set_label('Value')
+        
+        # Set labels and title
+        ax.set_xlabel('X axis')
+        ax.set_ylabel('Y axis')
+        ax.set_zlabel('Z axis')
+        ax.set_title('Negative Values in 3D Tensor (Values < {})'.format(threshold))
+        
+        plt.tight_layout()
+        plt.show()
+    else:
+        print("No negative values found in the tensor.")
