@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).parent.parent.absolute()
 
 # Grid and simulation parameters
-N_POINTS = 128
+N_POINTS = 64
 T = -5  # Initial time horizon
 MAX_TIME = -40  # Maximum time horizon to try
 CONVERGENCE_THRESHOLD = 1e-3
