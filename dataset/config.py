@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).parent.parent.absolute()
 
 # Grid and simulation parameters
-N_POINTS = 101
+N_POINTS = 64
 T = -5  # Initial time horizon
 MAX_TIME = -40  # Maximum time horizon to try
 CONVERGENCE_THRESHOLD = 1e-3
@@ -18,7 +18,7 @@ DEFAULT_ENV_HEIGHT = 10
 DEFAULT_NUM_OBSTACLES = 3
 
 # Dataset parameters
-NUM_SAMPLES = 1200  # Number of examples to generate
+NUM_SAMPLES = 600  # Number of examples to generate
 GLOBAL_SEED = 42  # Global random seed for reproducibility
 
 # Obstacle parameters

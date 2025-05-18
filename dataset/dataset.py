@@ -91,17 +91,17 @@ def create_environment_grid(env, grid):
     Returns:
         jax.numpy.ndarray: Binary grid where 1 represents obstacles and 0 represents free space
     """
-    # Extract x, y coordinates from the grid states
-    x = grid.states[..., 0]
-    y = grid.states[..., 1]
-    
-    # Get signed distances for the x, y coordinates
+    # Create meshgrid from coordinate vectors
+    x, y = jnp.meshgrid(grid.coordinate_vectors[0], grid.coordinate_vectors[1], indexing='ij')
+        
     signed_distances = env.get_signed_distances(x, y)
     
     # Convert signed distances to binary grid (1 for obstacles, 0 for free space)
     # Negative values indicate inside obstacles
     binary_grid = jnp.where(signed_distances <= 0, 1.0, 0.0)
-    
+        
+    assert binary_grid.shape == (N_POINTS, N_POINTS)
+        
     return binary_grid
 
 def process_sample(sample_id, output_dir, key):
@@ -126,7 +126,7 @@ def process_sample(sample_id, output_dir, key):
     # Randomly add -1 to 1 number of obstacles
     num_obstacles = DEFAULT_NUM_OBSTACLES + jax.random.randint(key, (1,), -1, 2)
     env.set_random_obstacles(num_obstacles, key=key)
-    
+        
     # Define file paths
     env_plot_path = os.path.join(sample_dir, ENVIRONMENT_PLOT_NAME)
     env_grid_path = os.path.join(sample_dir, ENVIRONMENT_GRID_NAME)

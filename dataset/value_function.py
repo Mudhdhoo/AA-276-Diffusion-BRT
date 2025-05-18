@@ -52,7 +52,7 @@ def get_V(env, dynamics, grid, times, convergence_threshold=CONVERGENCE_THRESHOL
     # Configure JAX memory management
     jax.config.update('jax_platform_name', 'gpu')
     jax.config.update('jax_default_matmul_precision', jax.lax.Precision.HIGHEST)
-    
+        
     # Extract x, y coordinates from the grid states
     x = grid.states[..., 0]
     y = grid.states[..., 1]
