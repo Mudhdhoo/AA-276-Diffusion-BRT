@@ -1,7 +1,0 @@
-Insert FiLM layers in every Down and Up module
-
-Potentially define a Mid module where we insert FiLM layers
-
-Don't forget to activate residuals
-
-Project the grid and concatinate it with the time embedding

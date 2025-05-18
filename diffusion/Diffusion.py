@@ -1,6 +1,7 @@
 import torch
 import logging
 from tqdm import tqdm
+from loguru import logger
 
 class Diffusion:
     def __init__(self, noise_steps=1000, beta_start=1e-4, beta_end=0.02, img_size=256, device="cuda"):

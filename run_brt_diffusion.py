@@ -8,41 +8,36 @@ from torch import optim
 from torch.utils.data import DataLoader
 from dataset.BRT_Dataset import BRT_Dataset
 from diffusion.film_module import UNet_conditional_FiLM, EMA, GridProjection
-import logging
 from torch.utils.tensorboard import SummaryWriter
 # from utils.debug_shapes import debug_shapes
 from diffusion.Diffusion import Diffusion
 
-logging.basicConfig(format="%(asctime)s - %(levelname)s: %(message)s", level=logging.INFO, datefmt="%I:%M:%S")
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def train(args):
-    channels = 101
-    grid_size = 128
+    channels = 64
+    grid_size = 64
 
     model = UNet_conditional_FiLM(c_in=channels, c_out=channels, grid_size=grid_size, device=device)
     grid_projection = GridProjection(in_channels=1, out_channels=256, cond_dim=256)#.to(device)
 
-    dataset = BRT_Dataset(args.dataset_path,
-                          grid_size=grid_size,
-                          num_samples=10)
+    dataset = BRT_Dataset(args.dataset_path, split="train")
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
     optimizer = optim.AdamW(model.parameters(), lr=args.lr)
     mse = nn.MSELoss()
-    diffusion = Diffusion(img_size=128, device=device)
+    diffusion = Diffusion(img_size=grid_size, noise_steps=1000, device=device)
     logger = SummaryWriter(os.path.join("runs", args.run_name))
     l = len(dataloader)
     ema = EMA(0.995)
     ema_model = copy.deepcopy(model).eval().requires_grad_(False)
 
     for epoch in range(args.epochs):
-        logging.info(f"Starting epoch {epoch}:")
-        pbar = tqdm(dataloader)
+        pbar = tqdm(dataloader, desc=f"Epoch {epoch}")
         for i, batch in enumerate(pbar):
+            val_func, grid = batch
             # val_func = val_func#.to(device)
             # grid = grid#.to(device)
-            val_func, grid = batch
 
             conditioning = grid_projection(grid)
             
@@ -77,9 +72,8 @@ def launch():
     args = parser.parse_args()
     args.run_name = "DDPM_conditional"
     args.epochs = 2  # Reduced for quick testing
-    args.batch_size = 1
-    args.num_classes = 10
-    args.dataset_path = "/Users/johncao/Documents/Programming/Stanford/AA276/project/outputs"
+    args.batch_size = 32
+    args.dataset_path = "/Users/johncao/Documents/Programming/Stanford/AA276/project/dataset_64"
     args.device = "cuda" if torch.cuda.is_available() else "cpu"
     args.lr = 3e-4
     args.use_synthetic_data = True  # Use synthetic data
