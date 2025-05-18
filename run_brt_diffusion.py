@@ -71,11 +71,10 @@ def launch():
     args = parser.parse_args()
     args.run_name = "DDPM_conditional"
     args.epochs = 2  # Reduced for quick testing
-    args.batch_size = 32
+    args.batch_size = 1
     args.dataset_path = "/Users/johncao/Documents/Programming/Stanford/AA276/project/dataset_64"
     args.device = "cuda" if torch.cuda.is_available() else "cpu"
     args.lr = 3e-4
-    args.use_synthetic_data = True  # Use synthetic data
     
     # Create necessary directories
    # os.makedirs(os.path.join("results", args.run_name), exist_ok=True)

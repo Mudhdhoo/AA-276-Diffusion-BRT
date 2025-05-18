@@ -4,11 +4,7 @@ from torchvision.transforms import transforms
 import numpy as np
 import os
 from loguru import logger
-
-MEAN_VAL_FUNC = np.load("dataset/statistics/mean_val_func.npy")
-STD_VAL_FUNC = np.load("dataset/statistics/std_val_func.npy")
-MEAN_ENV_GRID = np.load("dataset/statistics/mean_env_grid.npy")
-STD_ENV_GRID = np.load("dataset/statistics/std_env_grid.npy")
+from dataset.statistics.stats import MEAN_VAL_FUNC, STD_VAL_FUNC, MEAN_ENV_GRID, STD_ENV_GRID
     
 class BRT_Dataset(Dataset):
     def __init__(self, data_dir, split="train", padded_grid_size=None, device="cuda"):
