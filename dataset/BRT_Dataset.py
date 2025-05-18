@@ -3,7 +3,6 @@ from torch.utils.data import Dataset
 from torchvision.transforms import transforms
 import numpy as np
 import os
-import pandas as pd
 from loguru import logger
 
 MEAN_VAL_FUNC = np.load("dataset/statistics/mean_val_func.npy")

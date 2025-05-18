@@ -1,6 +1,5 @@
 import os
 import copy
-import numpy as np
 import torch
 import torch.nn as nn
 from tqdm import tqdm
@@ -9,7 +8,7 @@ from torch.utils.data import DataLoader
 from dataset.BRT_Dataset import BRT_Dataset
 from diffusion.film_module import UNet_conditional_FiLM, EMA, GridProjection
 from torch.utils.tensorboard import SummaryWriter
-# from utils.debug_shapes import debug_shapes
+from utils.debug_shapes import debug_shapes
 from diffusion.Diffusion import Diffusion
 
 device = "cuda" if torch.cuda.is_available() else "cpu"

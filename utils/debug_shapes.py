@@ -1,5 +1,5 @@
 import torch
-from diffusion.ddpm_conditional_new import Diffusion
+from diffusion import Diffusion
 from diffusion.film_module import UNet_conditional_FiLM, EMA, GridProjection
 
 def debug_shapes():
