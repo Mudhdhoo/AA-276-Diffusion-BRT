@@ -48,6 +48,7 @@ class BRT_Dataset(Dataset):
         
         return padded_val_func
 
+
     def __len__(self):
         return len(self.sample_paths)
     
@@ -55,9 +56,6 @@ class BRT_Dataset(Dataset):
         sample_path = self.sample_paths[idx]
         val_func = np.load(f"{sample_path}/value_function.npy")
         env_grid = np.load(f"{sample_path}/environment_grid.npy")
-
-       # val_func = self.transform_val_func(val_func).float()#.to(self.device)
-       # env_grid = self.transform_env_grid(env_grid).float()#.to(self.device)
 
         val_func = torch.from_numpy(val_func).float()
         env_grid = torch.from_numpy(env_grid).float()
@@ -83,6 +81,24 @@ class BRT_Dataset(Dataset):
 
         return val_func_last, env_grid
     
+    def sample_env_grid(self, n):
+        """
+        Sample n random environment grids from the dataset.
+        
+        Args:
+            n (int): Number of environment grids to sample
+            
+        Returns:
+            torch.Tensor: Tensor of shape (n, 1, H, W) containing n sampled environment grids
+        """
+        indices = torch.randint(0, len(self), (n,))
+        env_grids = []
+        
+        for idx in indices:
+            _, env_grid = self[idx]
+            env_grids.append(env_grid)
+            
+        return torch.stack(env_grids)
 
 if __name__ == "__main__":
     dataset = BRT_Dataset(data_dir="/Users/johncao/Documents/Programming/Stanford/AA276/project/dataset_64",

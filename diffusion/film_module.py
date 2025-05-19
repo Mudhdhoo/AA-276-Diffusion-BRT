@@ -292,9 +292,7 @@ class UNet_conditional_FiLM(nn.Module):
         x4 = self.sa3(x4)
 
         x4 = self.mid(x4, t)
-       # x4 = self.bot1(x4)
-        #x4 = self.bot2(x4)
-       # x4 = self.bot3(x4)
+
         x = self.up1(x4, x3, t)
         x = self.sa4(x)
         x = self.up2(x, x2, t)

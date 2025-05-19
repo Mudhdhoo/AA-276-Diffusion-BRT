@@ -57,3 +57,37 @@ wandb/
 notes.txt
 
 test.py
+
+runs/
+models/
+results/
+
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.ico
+
+# Tf events
+*.tfevents*
+
+# Tensorboard
+tensorboard/
+
+# all directories containing .png files
+**/*.png
+
+# all directories containing .jpg files
+**/*.jpg
+
+# all directories containing .jpeg files
+**/*.jpeg
+
+# all directories containing .gif files
+**/*.gif
+
+# all directories containing .bmp files
+**/*.bmp
+

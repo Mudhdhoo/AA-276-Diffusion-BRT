@@ -3,3 +3,21 @@ gdown https://drive.google.com/drive/u/1/folders/1wX8HXsT8_ejq72OjhOQf47JY4H9SH-
 
 # Upload project to VM
 scp -r project paperspace@184.105.4.94:~/
+
+scp project/environment.yml paperspace@184.105.4.94:~/project/
+
+
+
+
+
+
+scp project/run_brt_diffusion.py paperspace@184.105.3.178:~/project/
+
+scp project/diffusion/Diffusion.py paperspace@184.105.3.178:~/project/diffusion/
+
+scp project/diffusion/utils.py paperspace@184.105.3.178:~/project/diffusion
+
+scp project/dataset/BRT_Dataset.py paperspace@184.105.3.178:~/project/dataset
+
+
+# Download plots
