@@ -1,2 +1,5 @@
 # Get dataset from drive
 gdown https://drive.google.com/drive/u/1/folders/1wX8HXsT8_ejq72OjhOQf47JY4H9SH-96 -O ./ --folder
+
+# Upload project to VM
+scp -r project paperspace@184.105.4.94:~/
