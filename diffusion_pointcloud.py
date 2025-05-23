@@ -2,10 +2,43 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, random_split
 from tqdm import tqdm
 import math
+import os
+import argparse
+import wandb
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from utils.visualize_pointclouds import visualize_point_clouds
+from utils.visualize_env_grids import visualize_random_grids
 
+def parse_args():
+    parser = argparse.ArgumentParser(description='Train BRT Diffusion Model')
+    parser.add_argument('--dataset_dir', type=str, 
+                      default='/Users/malte/AA-276-Diffusion-BRT/dataset/outputs/16_May_2025_20_36 (64x64x64)_pointcloud_2000',
+                      help='Path to dataset directory containing sample_* folders')
+    parser.add_argument('--num_epochs', type=int, default=1000,
+                      help='Number of training epochs')
+    parser.add_argument('--sample_every', type=int, default=100,
+                      help='Generate samples every N epochs')
+    parser.add_argument('--num_timesteps', type=int, default=1000,
+                      help='Number of diffusion timesteps')
+    parser.add_argument('--batch_size', type=int, default=64,
+                      help='Training batch size')
+    parser.add_argument('--lr', type=float, default=1e-4,
+                      help='Learning rate')
+    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
+                      help='Device to use for training (cuda/cpu)')
+    parser.add_argument('--wandb_api_key', type=str, default=None,
+                      help='Weights & Biases API key (optional)')
+    parser.add_argument('--wandb_project', type=str, default='brt-diffusion',
+                      help='Weights & Biases project name')
+    parser.add_argument('--wandb_entity', type=str, default=None,
+                      help='Weights & Biases entity name')
+    parser.add_argument('--seed', type=int, default=42,
+                      help='Random seed for reproducibility')
+    return parser.parse_args()
 
 class SinusoidalPositionEmbeddings(nn.Module):
     """Sinusoidal position embeddings for time steps"""
@@ -248,25 +281,213 @@ class BRTDiffusionModel(nn.Module):
 
 class BRTDataset(Dataset):
     """Dataset for BRT point clouds and environments"""
-    def __init__(self, brt_data, env_data):
+    def __init__(self, dataset_dir):
         """
-        brt_data: (num_samples, N, state_dim) - BRT point clouds
-        env_data: (num_samples, env_size, env_size) - environment matrices
+        dataset_dir: Path to the dataset directory containing sample_* folders
         """
-        self.brt_data = torch.FloatTensor(brt_data)
-        self.env_data = torch.FloatTensor(env_data)
+        self.dataset_dir = dataset_dir
+        self.sample_dirs = []
         
+        # Find all sample directories and verify they have required files
+        for d in sorted(os.listdir(dataset_dir)):
+            if d.startswith('sample_'):
+                point_cloud_path = os.path.join(dataset_dir, d, 'point_cloud.npy')
+                env_grid_path = os.path.join(dataset_dir, d, 'environment_grid.npy')
+                
+                if os.path.exists(point_cloud_path) and os.path.exists(env_grid_path):
+                    self.sample_dirs.append(d)
+                else:
+                    print(f"Warning: Skipping {d} due to missing files")
+        
+        if not self.sample_dirs:
+            raise ValueError("No valid samples found in dataset directory")
+        
+        # Load first sample to determine dimensions
+        first_point_cloud = np.load(os.path.join(dataset_dir, self.sample_dirs[0], 'point_cloud.npy'))
+        first_env = np.load(os.path.join(dataset_dir, self.sample_dirs[0], 'environment_grid.npy'))
+        
+        self.num_points = first_point_cloud.shape[0]  # N points
+        self.state_dim = first_point_cloud.shape[1]   # 3D coordinates
+        self.env_size = first_env.shape[0]            # Environment grid size
+        
+        # Compute normalization statistics
+        self.compute_normalization_stats()
+        
+        print(f"Found {len(self.sample_dirs)} valid samples")
+        
+    def compute_normalization_stats(self):
+        """Compute mean and std for point cloud normalization"""
+        all_points = []
+        for d in self.sample_dirs:
+            points = np.load(os.path.join(self.dataset_dir, d, 'point_cloud.npy'))
+            all_points.append(points)
+        
+        all_points = np.concatenate(all_points, axis=0)
+        self.points_mean = np.mean(all_points, axis=0)
+        self.points_std = np.std(all_points, axis=0)
+        
+        # Ensure std is not zero
+        self.points_std = np.maximum(self.points_std, 1e-6)
+        
+        print("Point cloud normalization stats:")
+        print(f"Mean: {self.points_mean}")
+        print(f"Std: {self.points_std}")
+    
+    def normalize_points(self, points):
+        """Normalize point cloud coordinates"""
+        return (points - self.points_mean) / self.points_std
+    
+    def denormalize_points(self, points):
+        """Denormalize point cloud coordinates"""
+        return points * self.points_std + self.points_mean
+    
     def __len__(self):
-        return len(self.brt_data)
+        return len(self.sample_dirs)
     
     def __getitem__(self, idx):
-        return self.brt_data[idx], self.env_data[idx]
+        sample_dir = self.sample_dirs[idx]
+        
+        # Load point cloud and environment
+        point_cloud = np.load(os.path.join(self.dataset_dir, sample_dir, 'point_cloud.npy'))
+        env_grid = np.load(os.path.join(self.dataset_dir, sample_dir, 'environment_grid.npy'))
+        
+        # Convert to torch tensors and normalize point cloud
+        point_cloud = torch.FloatTensor(self.normalize_points(point_cloud))
+        env_grid = torch.FloatTensor(env_grid)
+        
+        return point_cloud, env_grid
 
 
-def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4):
+def visualize_point_cloud(points, title=None, save_path=None, dataset=None):
+    """Visualize a single point cloud and optionally save it."""
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Denormalize points if dataset is provided
+    if dataset is not None:
+        points = dataset.denormalize_points(points)
+    
+    # Scale coordinates to match environment dimensions
+    x = points[:, 0] * (10.0 / 64.0)  # Scale x from [0,64] to [0,10]
+    y = points[:, 1] * (10.0 / 64.0)  # Scale y from [0,64] to [0,10]
+    theta = points[:, 2] * (2 * np.pi / 64.0) - np.pi  # Scale theta from [0,64] to [-π,π]
+    
+    ax.scatter(x, y, theta, s=2, alpha=0.5)
+    if title:
+        ax.set_title(title)
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('θ')
+    # Set axis limits
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, 10)
+    ax.set_zlim(-np.pi, np.pi)
+    if save_path:
+        plt.savefig(save_path)
+        plt.close()
+    else:
+        plt.show()
+
+def visualize_environment_grid(grid, title=None, save_path=None):
+    """Visualize a single environment grid and optionally save it."""
+    plt.figure(figsize=(8, 8))
+    # Use binary colormap and set vmin/vmax to ensure binary visualization
+    plt.imshow(grid, cmap='binary', vmin=0, vmax=1, extent=[0, 10, 0, 10])  # Set extent to match coordinate system
+    if title:
+        plt.title(title)
+    plt.colorbar(label='Obstacle (1) / Free Space (0)')
+    plt.axis('equal')  # Ensure equal aspect ratio
+    # Set axis limits to match coordinate system
+    plt.xlim(0, 10)
+    plt.ylim(0, 10)
+    if save_path:
+        plt.savefig(save_path)
+        plt.close()
+    else:
+        plt.show()
+
+def visualize_denoising_process(points_sequence, titles, save_path=None, dataset=None):
+    """Visualize the denoising process in a single figure with subplots.
+    
+    Args:
+        points_sequence: List of point clouds to visualize
+        titles: List of titles for each subplot
+        save_path: Optional path to save the figure
+        dataset: Dataset object for denormalization
+    """
+    n_steps = len(points_sequence)
+    n_cols = 5  # Fixed number of columns (initial + 3 steps + final)
+    n_rows = 1  # Single row
+    
+    fig = plt.figure(figsize=(25, 5))  # Wider figure for 5 subplots
+    
+    for i, (points, title) in enumerate(zip(points_sequence, titles)):
+        ax = fig.add_subplot(n_rows, n_cols, i + 1, projection='3d')
+        
+        # Denormalize points if dataset is provided
+        if dataset is not None:
+            points = dataset.denormalize_points(points)
+        
+        # Scale coordinates to match environment dimensions
+        x = points[:, 0] * (10.0 / 64.0)  # Scale x from [0,64] to [0,10]
+        y = points[:, 1] * (10.0 / 64.0)  # Scale y from [0,64] to [0,10]
+        theta = points[:, 2] * (2 * np.pi / 64.0) - np.pi  # Scale theta from [0,64] to [-π,π]
+        
+        ax.scatter(x, y, theta, s=2, alpha=0.5)
+        ax.set_title(title)
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('θ')
+        # Set axis limits
+        ax.set_xlim(0, 10)
+        ax.set_ylim(0, 10)
+        ax.set_zlim(-np.pi, np.pi)
+        # Set equal aspect ratio for all axes
+        ax.set_box_aspect([1, 1, 1])
+    
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path)
+        plt.close()
+    else:
+        plt.show()
+
+def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_every=10, wandb_api_key=None, wandb_project='brt-diffusion', wandb_entity=None):
     """Training loop for the diffusion model"""
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    # Initialize wandb
+    if wandb_api_key:
+        wandb.login(key=wandb_api_key)
+        wandb.init(project=wandb_project, entity=wandb_entity)
+        wandb.config.update({
+            'num_epochs': num_epochs,
+            'batch_size': batch_size,
+            'learning_rate': lr,
+            'sample_every': sample_every,
+            'num_timesteps': model.num_timesteps,
+            'num_points': model.num_points,
+            'env_size': model.env_size,
+            'points_mean': dataset.points_mean.tolist(),
+            'points_std': dataset.points_std.tolist()
+        })
+
+    # Split dataset into train and test
+    train_size = int(0.8 * len(dataset))
+    test_size = len(dataset) - train_size
+    train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
+    
+    # Create dataloaders
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    
+    # Create fixed training samples for consistent evaluation
+    num_vis_samples = 4  # Number of different samples to visualize
+    train_indices = torch.randint(0, len(train_dataset), (num_vis_samples,))
+    vis_samples = [(train_dataset[i][0], train_dataset[i][1]) for i in train_indices]  # (point_cloud, env_grid) pairs
+    
+    # Create output directory for samples
+    os.makedirs('samples', exist_ok=True)
     
     model.train()
     losses = []
@@ -274,7 +495,7 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4):
     for epoch in range(num_epochs):
         epoch_losses = []
         
-        for brt_batch, env_batch in tqdm(dataloader, desc=f'Epoch {epoch+1}/{num_epochs}'):
+        for brt_batch, env_batch in tqdm(train_dataloader, desc=f'Epoch {epoch+1}/{num_epochs}'):
             brt_batch = brt_batch.to(model.device)
             env_batch = env_batch.to(model.device)
             
@@ -290,46 +511,134 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4):
         
         if (epoch + 1) % 10 == 0:
             print(f'Epoch {epoch+1}, Loss: {avg_loss:.6f}')
+            if wandb_api_key:
+                wandb.log({'loss': avg_loss}, step=epoch)
+            
+        # Generate samples periodically using fixed training samples
+        if (epoch + 1) % sample_every == 0:
+            model.eval()
+            with torch.no_grad():
+                print(f"\nGenerating samples at epoch {epoch+1}:")
+                
+                # Create epoch-specific directory
+                epoch_dir = os.path.join('samples', f'epoch_{epoch+1}')
+                os.makedirs(epoch_dir, exist_ok=True)
+                
+                for i, (true_pc, env_grid) in enumerate(vis_samples):
+                    # Move to device
+                    env_grid = env_grid.to(model.device)
+                    
+                    # Save and log environment grid
+                    env_save_path = os.path.join(epoch_dir, f'env_{i+1}.png')
+                    visualize_environment_grid(env_grid.squeeze(0).cpu().numpy(), f'Environment {i+1}', env_save_path)
+                    if wandb_api_key:
+                        wandb.log({f'epoch_{epoch+1}/env_{i+1}': wandb.Image(env_save_path)})
+                    
+                    # Generate sample
+                    generated_brt = model.sample(env_grid.unsqueeze(0), num_samples=1)
+                    generated_brt = generated_brt[0].cpu().numpy()  # Remove batch dimension
+                    
+                    # Save and log generated point cloud
+                    pc_save_path = os.path.join(epoch_dir, f'generated_pc_{i+1}.png')
+                    visualize_point_cloud(generated_brt, f'Generated Point Cloud {i+1}', pc_save_path, dataset)
+                    if wandb_api_key:
+                        wandb.log({f'epoch_{epoch+1}/generated_pc_{i+1}': wandb.Image(pc_save_path)})
+                    
+                    # Save and log true point cloud for comparison
+                    true_pc_save_path = os.path.join(epoch_dir, f'true_pc_{i+1}.png')
+                    visualize_point_cloud(true_pc.cpu().numpy(), f'True Point Cloud {i+1}', true_pc_save_path, dataset)
+                    if wandb_api_key:
+                        wandb.log({f'epoch_{epoch+1}/true_pc_{i+1}': wandb.Image(true_pc_save_path)})
+                    
+                    # Start from pure noise
+                    x_t = torch.randn(1, model.num_points, model.state_dim).to(model.device)
+                    
+                    # Save exactly 5 steps total
+                    num_steps = 5  # Total number of steps to visualize
+                    step_indices = np.linspace(0, model.num_timesteps-1, num_steps, dtype=int)
+                    
+                    # Store points and titles for visualization
+                    points_sequence = []  # Start empty
+                    titles = []
+                    
+                    # Add all steps
+                    for t in reversed(range(model.num_timesteps)):
+                        t_batch = torch.full((1,), t, device=model.device, dtype=torch.long)
+                        x_t = model.p_sample(x_t, t_batch, env_grid.unsqueeze(0))
+                        
+                        if t in step_indices:
+                            points_sequence.append(x_t[0].cpu().numpy())
+                            titles.append(f't={t}')
+                    
+                    # Create and save denoising process visualization
+                    denoising_save_path = os.path.join(epoch_dir, f'denoising_{i+1}.png')
+                    visualize_denoising_process(points_sequence, titles, denoising_save_path, dataset)
+                    if wandb_api_key:
+                        wandb.log({f'epoch_{epoch+1}/denoising_{i+1}': wandb.Image(denoising_save_path)})
+                    
+                    print(f"Training sample {i+1}, generated BRT shape: {generated_brt.shape}")
+            
+            model.train()
+            print()  # Add newline for better readability
     
-    return losses
+    if wandb_api_key:
+        wandb.finish()
+    
+    return losses, vis_samples  # Return visualization samples for potential later use
 
 
 # Example usage
 if __name__ == "__main__":
-    # Hyperparameters
-    STATE_DIM = 3  # e.g., for unicycle model (x, y, theta)
-    ENV_SIZE = 32  # 32x32 environment grid
-    NUM_POINTS = 100  # Number of points in BRT point cloud
-    NUM_TIMESTEPS = 1000  # Diffusion steps
-    BATCH_SIZE = 16
-    NUM_EPOCHS = 100
-    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # Parse command line arguments
+    args = parse_args()
     
-    # Create synthetic data for demonstration
-    num_samples = 1000
-    brt_data = np.random.randn(num_samples, NUM_POINTS, STATE_DIM)
-    env_data = np.random.rand(num_samples, ENV_SIZE, ENV_SIZE)
+    # Set random seeds for reproducibility
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
     
     # Create dataset
-    dataset = BRTDataset(brt_data, env_data)
+    dataset = BRTDataset(args.dataset_dir)
+    
+    # Get dimensions from dataset
+    STATE_DIM = dataset.state_dim
+    NUM_POINTS = dataset.num_points
+    ENV_SIZE = dataset.env_size
     
     # Initialize model
     model = BRTDiffusionModel(
         state_dim=STATE_DIM,
         env_size=ENV_SIZE,
         num_points=NUM_POINTS,
-        num_timesteps=NUM_TIMESTEPS,
-        device=DEVICE
-    ).to(DEVICE)
+        num_timesteps=args.num_timesteps,
+        device=args.device
+    ).to(args.device)
     
-    print(f"Model initialized on {DEVICE}")
+    print(f"Model initialized on {args.device}")
     print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"Dataset dimensions: {NUM_POINTS} points, {STATE_DIM}D coordinates, {ENV_SIZE}x{ENV_SIZE} environment")
+    print(f"Training for {args.num_epochs} epochs with batch size {args.batch_size}")
+    print(f"Learning rate: {args.lr}")
+    print(f"Sampling every {args.sample_every} epochs")
     
     # Train model
-    # losses = train_model(model, dataset, num_epochs=NUM_EPOCHS, batch_size=BATCH_SIZE)
+    losses, vis_samples = train_model(
+        model, 
+        dataset, 
+        num_epochs=args.num_epochs, 
+        batch_size=args.batch_size,
+        lr=args.lr,
+        sample_every=args.sample_every,
+        wandb_api_key=args.wandb_api_key,
+        wandb_project=args.wandb_project,
+        wandb_entity=args.wandb_entity
+    )
     
-    # Generate samples
-    model.eval()
-    test_env = torch.rand(1, ENV_SIZE, ENV_SIZE).to(DEVICE)
-    generated_brt = model.sample(test_env, num_samples=1)
-    print(f"Generated BRT shape: {generated_brt.shape}")
+    # Save the trained model and visualization samples
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'vis_samples': vis_samples,
+        'losses': losses
+    }, 'brt_diffusion_model.pt')
+    print("Model, visualization samples, and training losses saved to brt_diffusion_model.pt")
