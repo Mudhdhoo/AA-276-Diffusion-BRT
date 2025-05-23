@@ -21,3 +21,8 @@ scp project/dataset/BRT_Dataset.py paperspace@184.105.3.178:~/project/dataset
 
 
 # Download plots
+scp paperspace@209.51.170.17:~/project/results/noise_step_50/1999.png ./
+
+scp -r diffusion/diff_3d paperspace@184.105.3.201:~/project/diffusion/
+
+scp -r run_brt_diffusion_3d.py paperspace@184.105.3.201:~/project/
