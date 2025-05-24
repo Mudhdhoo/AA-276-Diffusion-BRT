@@ -16,17 +16,17 @@ def parse_args():
     parser.add_argument('--dataset_dir', type=str, 
                       default='/Users/malte/AA-276-Diffusion-BRT/dataset/outputs/16_May_2025_20_36 (64x64x64)_pointcloud_2000',
                       help='Path to dataset directory containing sample_* folders')
-    parser.add_argument('--num_epochs', type=int, default=1000,
+    parser.add_argument('--num_epochs', type=int, default=2000,
                       help='Number of training epochs')
-    parser.add_argument('--sample_every', type=int, default=1,
+    parser.add_argument('--sample_every', type=int, default=100,
                       help='Generate samples every N epochs')
     parser.add_argument('--checkpoint_every', type=int, default=100,
                       help='Save model checkpoint every N epochs')
     parser.add_argument('--num_timesteps', type=int, default=1000,
                       help='Number of diffusion timesteps')
-    parser.add_argument('--batch_size', type=int, default=64,
+    parser.add_argument('--batch_size', type=int, default=128,
                       help='Training batch size')
-    parser.add_argument('--lr', type=float, default=1e-4,
+    parser.add_argument('--lr', type=float, default=2e-4,
                       help='Learning rate')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                       help='Device to use for training (cuda/cpu)')
@@ -454,15 +454,19 @@ def visualize_denoising_process(points_sequence, titles, save_path=None, dataset
 
 def visualize_comparison(true_pc, generated_pc, env_grid, title=None, save_path=None, dataset=None):
     """Visualize true BRT, generated BRT, and environment side by side."""
-    fig = plt.figure(figsize=(30, 8))
+    # Create figure with specific size ratio to ensure square environment plot
+    fig = plt.figure(figsize=(30, 10))
     
-    # Environment subplot
-    ax1 = fig.add_subplot(131)
-    ax1.imshow(env_grid, cmap='binary', vmin=0, vmax=1, extent=[0, 10, 0, 10])
-    ax1.set_title('Environment')
-    ax1.set_xlabel('X')
-    ax1.set_ylabel('Y')
-    ax1.axis('equal')
+    # Environment subplot - make it square
+    ax1 = fig.add_subplot(131, aspect='equal')
+    im = ax1.imshow(env_grid, cmap='binary', vmin=0, vmax=1, extent=[0, 10, 0, 10])
+    ax1.set_title('Environment Grid', fontsize=14, pad=20)
+    ax1.set_xlabel('X Position (m)', fontsize=12)
+    ax1.set_ylabel('Y Position (m)', fontsize=12)
+    ax1.set_xlim(0, 10)
+    ax1.set_ylim(0, 10)
+    cbar = plt.colorbar(im, ax=ax1)
+    cbar.set_label('Obstacle (1) / Free Space (0)', fontsize=12)
     
     # True BRT subplot
     ax2 = fig.add_subplot(132, projection='3d')
@@ -471,11 +475,11 @@ def visualize_comparison(true_pc, generated_pc, env_grid, title=None, save_path=
     x = true_pc[:, 0] * (10.0 / 64.0)
     y = true_pc[:, 1] * (10.0 / 64.0)
     theta = true_pc[:, 2] * (2 * np.pi / 64.0) - np.pi
-    ax2.scatter(x, y, theta, s=2, alpha=0.5)
-    ax2.set_title('True BRT')
-    ax2.set_xlabel('X')
-    ax2.set_ylabel('Y')
-    ax2.set_zlabel('θ')
+    scatter2 = ax2.scatter(x, y, theta, s=2, alpha=0.5, label='BRT Points')
+    ax2.set_title('True BRT Point Cloud', fontsize=14, pad=20)
+    ax2.set_xlabel('X Position (m)', fontsize=12)
+    ax2.set_ylabel('Y Position (m)', fontsize=12)
+    ax2.set_zlabel('θ (rad)', fontsize=12)
     ax2.set_xlim(0, 10)
     ax2.set_ylim(0, 10)
     ax2.set_zlim(-np.pi, np.pi)
@@ -487,21 +491,21 @@ def visualize_comparison(true_pc, generated_pc, env_grid, title=None, save_path=
     x = generated_pc[:, 0] * (10.0 / 64.0)
     y = generated_pc[:, 1] * (10.0 / 64.0)
     theta = generated_pc[:, 2] * (2 * np.pi / 64.0) - np.pi
-    ax3.scatter(x, y, theta, s=2, alpha=0.5)
-    ax3.set_title('Generated BRT')
-    ax3.set_xlabel('X')
-    ax3.set_ylabel('Y')
-    ax3.set_zlabel('θ')
+    scatter3 = ax3.scatter(x, y, theta, s=2, alpha=0.5, label='BRT Points')
+    ax3.set_title('Generated BRT Point Cloud', fontsize=14, pad=20)
+    ax3.set_xlabel('X Position (m)', fontsize=12)
+    ax3.set_ylabel('Y Position (m)', fontsize=12)
+    ax3.set_zlabel('θ (rad)', fontsize=12)
     ax3.set_xlim(0, 10)
     ax3.set_ylim(0, 10)
     ax3.set_zlim(-np.pi, np.pi)
     
     if title:
-        fig.suptitle(title)
+        fig.suptitle(title, fontsize=16, y=0.95)
     
     plt.tight_layout()
     if save_path:
-        plt.savefig(save_path)
+        plt.savefig(save_path, bbox_inches='tight', dpi=300)
         plt.close()
     else:
         plt.show()
@@ -522,11 +526,11 @@ def visualize_denoising_with_true(points_sequence, true_pc, titles, save_path=No
         y = points[:, 1] * (10.0 / 64.0)
         theta = points[:, 2] * (2 * np.pi / 64.0) - np.pi
         
-        ax.scatter(x, y, theta, s=2, alpha=0.5)
-        ax.set_title(title)
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_zlabel('θ')
+        scatter = ax.scatter(x, y, theta, s=2, alpha=0.5, label='BRT Points')
+        ax.set_title(f'Denoising Step {title}', fontsize=14, pad=20)
+        ax.set_xlabel('X Position (m)', fontsize=12)
+        ax.set_ylabel('Y Position (m)', fontsize=12)
+        ax.set_zlabel('θ (rad)', fontsize=12)
         ax.set_xlim(0, 10)
         ax.set_ylim(0, 10)
         ax.set_zlim(-np.pi, np.pi)
@@ -538,18 +542,18 @@ def visualize_denoising_with_true(points_sequence, true_pc, titles, save_path=No
     x = true_pc[:, 0] * (10.0 / 64.0)
     y = true_pc[:, 1] * (10.0 / 64.0)
     theta = true_pc[:, 2] * (2 * np.pi / 64.0) - np.pi
-    ax_true.scatter(x, y, theta, s=2, alpha=0.5)
-    ax_true.set_title('True BRT')
-    ax_true.set_xlabel('X')
-    ax_true.set_ylabel('Y')
-    ax_true.set_zlabel('θ')
+    scatter_true = ax_true.scatter(x, y, theta, s=2, alpha=0.5, label='BRT Points')
+    ax_true.set_title('True BRT Point Cloud', fontsize=14, pad=20)
+    ax_true.set_xlabel('X Position (m)', fontsize=12)
+    ax_true.set_ylabel('Y Position (m)', fontsize=12)
+    ax_true.set_zlabel('θ (rad)', fontsize=12)
     ax_true.set_xlim(0, 10)
     ax_true.set_ylim(0, 10)
     ax_true.set_zlim(-np.pi, np.pi)
     
     plt.tight_layout()
     if save_path:
-        plt.savefig(save_path)
+        plt.savefig(save_path, bbox_inches='tight', dpi=300)
         plt.close()
     else:
         plt.show()
