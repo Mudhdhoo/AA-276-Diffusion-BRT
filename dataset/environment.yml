@@ -1,12 +1,13 @@
 name: diffusion-brt
 channels:
-  - conda-forge
-  - nvidia
   - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
 dependencies:
   - python=3.10
   - pip
-  - cudatoolkit=12.2
+  - cuda-toolkit=12.2
   - numpy>=1.24.0
   - matplotlib>=3.7.0
   - tqdm>=4.65.0
