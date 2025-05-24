@@ -8,24 +8,13 @@ import wandb
 from models.diffusion_modules import BRTDiffusionModel
 from dataset.BRTDataset import BRTDataset
 from utils.visualizations import visualize_comparison, visualize_denoising_with_true
+from loguru import logger
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train BRT Diffusion Model')
     parser.add_argument('--dataset_dir', type=str, 
                       default='point_cloud_dataset',
                       help='Path to dataset directory containing sample_* folders')
-    parser.add_argument('--num_epochs', type=int, default=2000,
-                      help='Number of training epochs')
-    parser.add_argument('--sample_every', type=int, default=100,
-                      help='Generate samples every N epochs')
-    parser.add_argument('--checkpoint_every', type=int, default=100,
-                      help='Save model checkpoint every N epochs')
-    parser.add_argument('--num_timesteps', type=int, default=1000,
-                      help='Number of diffusion timesteps')
-    parser.add_argument('--batch_size', type=int, default=128,
-                      help='Training batch size')
-    parser.add_argument('--lr', type=float, default=2e-4,
-                      help='Learning rate')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                       help='Device to use for training (cuda/cpu)')
     parser.add_argument('--wandb_api_key', type=str, default=None,
@@ -36,6 +25,26 @@ def parse_args():
                       help='Weights & Biases entity name')
     parser.add_argument('--seed', type=int, default=42,
                       help='Random seed for reproducibility')
+
+    # Training parameters
+    parser.add_argument('--num_epochs', type=int, default=2000,
+                      help='Number of training epochs')
+    parser.add_argument('--batch_size', type=int, default=64,
+                      help='Training batch size')
+    parser.add_argument('--lr', type=float, default=2e-4,
+                      help='Learning rate')
+    parser.add_argument('--sample_every', type=int, default=100,
+                      help='Generate samples every N epochs')
+    parser.add_argument('--checkpoint_every', type=int, default=100,
+                      help='Save model checkpoint every N epochs')
+
+    # Diffusion parameters
+    parser.add_argument('--num_timesteps', type=int, default=1000,
+                      help='Number of diffusion timesteps')
+    parser.add_argument("--beta_start", type=float, default=1e-4,
+                      help="Beta start for the beta schedule")
+    parser.add_argument("--beta_end", type=float, default=0.02,
+                      help="Beta end for the beta schedule")
     parser.add_argument('--null_conditioning_prob', type=float, default=0.15,
                       help='Probability of using null conditioning during training for CFG')
     parser.add_argument('--guidance_scale', type=float, default=3.0,
@@ -103,6 +112,7 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_
         
         avg_loss = np.mean(epoch_losses)
         losses.append(avg_loss)
+        logger.info(f'Epoch {epoch+1}, Loss: {avg_loss:.6f}')
         
         if (epoch + 1) % 10 == 0:
             print(f'Epoch {epoch+1}, Loss: {avg_loss:.6f}')
@@ -221,6 +231,8 @@ if __name__ == "__main__":
         env_size=ENV_SIZE,
         num_points=NUM_POINTS,
         num_timesteps=args.num_timesteps,
+        beta_start=args.beta_start,
+        beta_end=args.beta_end,
         device=args.device,
         null_conditioning_prob=args.null_conditioning_prob
     ).to(args.device)

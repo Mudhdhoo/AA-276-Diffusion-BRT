@@ -2,21 +2,9 @@
 gdown https://drive.google.com/drive/u/1/folders/1wX8HXsT8_ejq72OjhOQf47JY4H9SH-96 -O ./ --folder
 
 # Upload project to VM
-scp -r diffusion paperspace@184.105.4.94:~/project/
+scp -r project paperspace@184.105.4.43:~/
 
-scp environment.yml paperspace@184.105.4.94:~/project/
 
-scp diffusion/run_brt_diffusion.py paperspace@184.105.3.178:~/project/
 
-scp diffusion/Diffusion.py paperspace@184.105.3.178:~/project/diffusion/
 
-scp diffusion/utils.py paperspace@184.105.3.178:~/project/diffusion/
-
-scp dataset/BRT_Dataset.py paperspace@184.105.3.178:~/project/dataset/
-
-# Download plots
-scp paperspace@209.51.170.17:~/project/results/noise_step_50/1999.png ./
-
-scp -r diffusion/diff_3d paperspace@184.105.3.201:~/project/diffusion/
-
-scp -r run_brt_diffusion_3d.py paperspace@184.105.3.201:~/project/
+scp -r paperspace@184.105.4.43:~/project/samples/epoch_700 ./
