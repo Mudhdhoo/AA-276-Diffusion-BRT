@@ -38,6 +38,10 @@ def parse_args():
                       help='Weights & Biases entity name')
     parser.add_argument('--seed', type=int, default=42,
                       help='Random seed for reproducibility')
+    parser.add_argument('--null_conditioning_prob', type=float, default=0.15,
+                      help='Probability of using null conditioning during training for CFG')
+    parser.add_argument('--guidance_scale', type=float, default=3.0,
+                      help='Guidance scale for classifier-free guidance during sampling')
     return parser.parse_args()
 
 class SinusoidalPositionEmbeddings(nn.Module):
@@ -167,17 +171,22 @@ class PointDiffusionNetwork(nn.Module):
 class BRTDiffusionModel(nn.Module):
     """Complete diffusion model for BRT generation"""
     def __init__(self, state_dim, env_size, num_points, num_timesteps=1000,
-                 beta_start=0.0001, beta_end=0.02, device='cuda'):
+                 beta_start=0.0001, beta_end=0.02, device='cuda', 
+                 null_conditioning_prob=0.15):
         super().__init__()
         self.state_dim = state_dim
         self.env_size = env_size
         self.num_points = num_points
         self.num_timesteps = num_timesteps
         self.device = device
+        self.null_conditioning_prob = null_conditioning_prob
         
         # Networks
         self.env_encoder = EnvironmentEncoder(env_size)
         self.denoiser = PointDiffusionNetwork(state_dim)
+        
+        # Create null environment (all zeros) for unconditional training
+        self.register_buffer('null_env', torch.zeros(1, env_size, env_size))
         
         # Noise schedule
         self.betas = torch.linspace(beta_start, beta_end, num_timesteps).to(device)
@@ -207,13 +216,28 @@ class BRTDiffusionModel(nn.Module):
         
         return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
     
-    def p_mean_variance(self, x_t, t, env):
-        """Compute mean and variance for reverse process"""
-        # Get environment embedding
-        env_embedding = self.env_encoder(env)
+    def p_mean_variance(self, x_t, t, env, guidance_scale=1.0):
+        """Compute mean and variance for reverse process with classifier-free guidance"""
+        batch_size = x_t.shape[0]
         
-        # Predict noise
-        noise_pred = self.denoiser(x_t, t, env_embedding)
+        if guidance_scale != 1.0:
+            # Classifier-free guidance: compute both conditional and unconditional predictions
+            
+            # Conditional prediction
+            env_embedding_cond = self.env_encoder(env)
+            noise_pred_cond = self.denoiser(x_t, t, env_embedding_cond)
+            
+            # Unconditional prediction (using null environment)
+            null_env_batch = self.null_env.expand(batch_size, -1, -1)
+            env_embedding_uncond = self.env_encoder(null_env_batch)
+            noise_pred_uncond = self.denoiser(x_t, t, env_embedding_uncond)
+            
+            # Apply classifier-free guidance
+            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
+        else:
+            # Standard conditional prediction
+            env_embedding = self.env_encoder(env)
+            noise_pred = self.denoiser(x_t, t, env_embedding)
         
         # Calculate mean
         beta_t = self.betas[t].view(-1, 1, 1)
@@ -229,9 +253,9 @@ class BRTDiffusionModel(nn.Module):
         return model_mean, posterior_variance
     
     @torch.no_grad()
-    def p_sample(self, x_t, t, env):
-        """Single reverse diffusion step"""
-        model_mean, posterior_variance = self.p_mean_variance(x_t, t, env)
+    def p_sample(self, x_t, t, env, guidance_scale=1.0):
+        """Single reverse diffusion step with classifier-free guidance"""
+        model_mean, posterior_variance = self.p_mean_variance(x_t, t, env, guidance_scale)
         
         noise = torch.randn_like(x_t)
         # No noise when t == 0
@@ -240,22 +264,22 @@ class BRTDiffusionModel(nn.Module):
         return model_mean + nonzero_mask * torch.sqrt(posterior_variance) * noise
     
     @torch.no_grad()
-    def sample(self, env, num_samples=1):
-        """Generate BRT samples given environment"""
+    def sample(self, env, num_samples=1, guidance_scale=1.0):
+        """Generate BRT samples given environment with classifier-free guidance"""
         batch_size = num_samples
         
         # Start from pure noise
         x_t = torch.randn(batch_size, self.num_points, self.state_dim).to(self.device)
         
-        # Reverse diffusion process
+        # Reverse diffusion process with guidance
         for t in reversed(range(self.num_timesteps)):
             t_batch = torch.full((batch_size,), t, device=self.device, dtype=torch.long)
-            x_t = self.p_sample(x_t, t_batch, env)
+            x_t = self.p_sample(x_t, t_batch, env, guidance_scale)
         
         return x_t
     
     def compute_loss(self, x_start, env):
-        """Compute training loss"""
+        """Compute training loss with classifier-free guidance"""
         batch_size = x_start.shape[0]
         
         # Sample random timesteps
@@ -267,8 +291,21 @@ class BRTDiffusionModel(nn.Module):
         # Forward diffusion
         x_noisy = self.q_sample(x_start, t, noise)
         
+        # Apply null conditioning with probability null_conditioning_prob
+        if self.training:
+            # Create a mask for which samples should use null conditioning
+            null_mask = torch.rand(batch_size, device=self.device) < self.null_conditioning_prob
+            
+            # Replace environments with null environment where mask is True
+            env_conditioned = env.clone()
+            if null_mask.any():
+                null_env_batch = self.null_env.expand(null_mask.sum(), -1, -1)
+                env_conditioned[null_mask] = null_env_batch
+        else:
+            env_conditioned = env
+        
         # Get environment embedding
-        env_embedding = self.env_encoder(env)
+        env_embedding = self.env_encoder(env_conditioned)
         
         # Predict noise
         noise_pred = self.denoiser(x_noisy, t, env_embedding)
@@ -558,7 +595,7 @@ def visualize_denoising_with_true(points_sequence, true_pc, titles, save_path=No
     else:
         plt.show()
 
-def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_every=10, checkpoint_every=100, wandb_api_key=None, wandb_project='brt-diffusion', wandb_entity=None):
+def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_every=10, checkpoint_every=100, wandb_api_key=None, wandb_project='brt-diffusion', wandb_entity=None, guidance_scale=1.0):
     """Training loop for the diffusion model"""
     # Initialize wandb
     if wandb_api_key:
@@ -574,7 +611,9 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_
             'num_points': model.num_points,
             'env_size': model.env_size,
             'points_mean': dataset.points_mean.tolist(),
-            'points_std': dataset.points_std.tolist()
+            'points_std': dataset.points_std.tolist(),
+            'null_conditioning_prob': model.null_conditioning_prob,
+            'guidance_scale': guidance_scale
         })
 
     # Create directories for checkpoints and samples
@@ -650,7 +689,7 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_
                     env_grid = env_grid.to(model.device)
                     
                     # Generate sample
-                    generated_brt = model.sample(env_grid.unsqueeze(0), num_samples=1)
+                    generated_brt = model.sample(env_grid.unsqueeze(0), num_samples=1, guidance_scale=guidance_scale)
                     generated_brt = generated_brt[0].cpu().numpy()  # Remove batch dimension
                     
                     # Create comparison visualization
@@ -680,7 +719,7 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_
                     # Add all steps
                     for t in reversed(range(model.num_timesteps)):
                         t_batch = torch.full((1,), t, device=model.device, dtype=torch.long)
-                        x_t = model.p_sample(x_t, t_batch, env_grid.unsqueeze(0))
+                        x_t = model.p_sample(x_t, t_batch, env_grid.unsqueeze(0), guidance_scale=guidance_scale)
                         
                         if t in step_indices:
                             points_sequence.append(x_t[0].cpu().numpy())
@@ -734,7 +773,8 @@ if __name__ == "__main__":
         env_size=ENV_SIZE,
         num_points=NUM_POINTS,
         num_timesteps=args.num_timesteps,
-        device=args.device
+        device=args.device,
+        null_conditioning_prob=args.null_conditioning_prob
     ).to(args.device)
     
     print(f"Model initialized on {args.device}")
@@ -743,6 +783,7 @@ if __name__ == "__main__":
     print(f"Training for {args.num_epochs} epochs with batch size {args.batch_size}")
     print(f"Learning rate: {args.lr}")
     print(f"Sampling every {args.sample_every} epochs")
+    print(f"Classifier-free guidance: null_conditioning_prob={args.null_conditioning_prob}, guidance_scale={args.guidance_scale}")
     
     # Train model
     losses, vis_samples = train_model(
@@ -755,7 +796,8 @@ if __name__ == "__main__":
         checkpoint_every=args.checkpoint_every,
         wandb_api_key=args.wandb_api_key,
         wandb_project=args.wandb_project,
-        wandb_entity=args.wandb_entity
+        wandb_entity=args.wandb_entity,
+        guidance_scale=args.guidance_scale
     )
     
     # Save the trained model and visualization samples
