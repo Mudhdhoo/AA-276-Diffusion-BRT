@@ -10,8 +10,6 @@ import argparse
 import wandb
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-from utils.visualize_pointclouds import visualize_point_clouds
-from utils.visualize_env_grids import visualize_random_grids
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train BRT Diffusion Model')
@@ -20,8 +18,10 @@ def parse_args():
                       help='Path to dataset directory containing sample_* folders')
     parser.add_argument('--num_epochs', type=int, default=1000,
                       help='Number of training epochs')
-    parser.add_argument('--sample_every', type=int, default=100,
+    parser.add_argument('--sample_every', type=int, default=1,
                       help='Generate samples every N epochs')
+    parser.add_argument('--checkpoint_every', type=int, default=100,
+                      help='Save model checkpoint every N epochs')
     parser.add_argument('--num_timesteps', type=int, default=1000,
                       help='Number of diffusion timesteps')
     parser.add_argument('--batch_size', type=int, default=64,
@@ -452,7 +452,109 @@ def visualize_denoising_process(points_sequence, titles, save_path=None, dataset
     else:
         plt.show()
 
-def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_every=10, wandb_api_key=None, wandb_project='brt-diffusion', wandb_entity=None):
+def visualize_comparison(true_pc, generated_pc, env_grid, title=None, save_path=None, dataset=None):
+    """Visualize true BRT, generated BRT, and environment side by side."""
+    fig = plt.figure(figsize=(30, 8))
+    
+    # Environment subplot
+    ax1 = fig.add_subplot(131)
+    ax1.imshow(env_grid, cmap='binary', vmin=0, vmax=1, extent=[0, 10, 0, 10])
+    ax1.set_title('Environment')
+    ax1.set_xlabel('X')
+    ax1.set_ylabel('Y')
+    ax1.axis('equal')
+    
+    # True BRT subplot
+    ax2 = fig.add_subplot(132, projection='3d')
+    if dataset is not None:
+        true_pc = dataset.denormalize_points(true_pc)
+    x = true_pc[:, 0] * (10.0 / 64.0)
+    y = true_pc[:, 1] * (10.0 / 64.0)
+    theta = true_pc[:, 2] * (2 * np.pi / 64.0) - np.pi
+    ax2.scatter(x, y, theta, s=2, alpha=0.5)
+    ax2.set_title('True BRT')
+    ax2.set_xlabel('X')
+    ax2.set_ylabel('Y')
+    ax2.set_zlabel('θ')
+    ax2.set_xlim(0, 10)
+    ax2.set_ylim(0, 10)
+    ax2.set_zlim(-np.pi, np.pi)
+    
+    # Generated BRT subplot
+    ax3 = fig.add_subplot(133, projection='3d')
+    if dataset is not None:
+        generated_pc = dataset.denormalize_points(generated_pc)
+    x = generated_pc[:, 0] * (10.0 / 64.0)
+    y = generated_pc[:, 1] * (10.0 / 64.0)
+    theta = generated_pc[:, 2] * (2 * np.pi / 64.0) - np.pi
+    ax3.scatter(x, y, theta, s=2, alpha=0.5)
+    ax3.set_title('Generated BRT')
+    ax3.set_xlabel('X')
+    ax3.set_ylabel('Y')
+    ax3.set_zlabel('θ')
+    ax3.set_xlim(0, 10)
+    ax3.set_ylim(0, 10)
+    ax3.set_zlim(-np.pi, np.pi)
+    
+    if title:
+        fig.suptitle(title)
+    
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path)
+        plt.close()
+    else:
+        plt.show()
+
+def visualize_denoising_with_true(points_sequence, true_pc, titles, save_path=None, dataset=None):
+    """Visualize the denoising process and true BRT side by side."""
+    n_steps = len(points_sequence)
+    fig = plt.figure(figsize=(30, 8))
+    
+    # Denoising process subplots
+    for i, (points, title) in enumerate(zip(points_sequence, titles)):
+        ax = fig.add_subplot(1, n_steps + 1, i + 1, projection='3d')
+        
+        if dataset is not None:
+            points = dataset.denormalize_points(points)
+        
+        x = points[:, 0] * (10.0 / 64.0)
+        y = points[:, 1] * (10.0 / 64.0)
+        theta = points[:, 2] * (2 * np.pi / 64.0) - np.pi
+        
+        ax.scatter(x, y, theta, s=2, alpha=0.5)
+        ax.set_title(title)
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('θ')
+        ax.set_xlim(0, 10)
+        ax.set_ylim(0, 10)
+        ax.set_zlim(-np.pi, np.pi)
+    
+    # True BRT subplot
+    ax_true = fig.add_subplot(1, n_steps + 1, n_steps + 1, projection='3d')
+    if dataset is not None:
+        true_pc = dataset.denormalize_points(true_pc)
+    x = true_pc[:, 0] * (10.0 / 64.0)
+    y = true_pc[:, 1] * (10.0 / 64.0)
+    theta = true_pc[:, 2] * (2 * np.pi / 64.0) - np.pi
+    ax_true.scatter(x, y, theta, s=2, alpha=0.5)
+    ax_true.set_title('True BRT')
+    ax_true.set_xlabel('X')
+    ax_true.set_ylabel('Y')
+    ax_true.set_zlabel('θ')
+    ax_true.set_xlim(0, 10)
+    ax_true.set_ylim(0, 10)
+    ax_true.set_zlim(-np.pi, np.pi)
+    
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path)
+        plt.close()
+    else:
+        plt.show()
+
+def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_every=10, checkpoint_every=100, wandb_api_key=None, wandb_project='brt-diffusion', wandb_entity=None):
     """Training loop for the diffusion model"""
     # Initialize wandb
     if wandb_api_key:
@@ -463,6 +565,7 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_
             'batch_size': batch_size,
             'learning_rate': lr,
             'sample_every': sample_every,
+            'checkpoint_every': checkpoint_every,
             'num_timesteps': model.num_timesteps,
             'num_points': model.num_points,
             'env_size': model.env_size,
@@ -470,6 +573,10 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_
             'points_std': dataset.points_std.tolist()
         })
 
+    # Create directories for checkpoints and samples
+    os.makedirs('checkpoints', exist_ok=True)
+    os.makedirs('samples', exist_ok=True)
+    
     # Split dataset into train and test
     train_size = int(0.8 * len(dataset))
     test_size = len(dataset) - train_size
@@ -485,9 +592,6 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_
     num_vis_samples = 4  # Number of different samples to visualize
     train_indices = torch.randint(0, len(train_dataset), (num_vis_samples,))
     vis_samples = [(train_dataset[i][0], train_dataset[i][1]) for i in train_indices]  # (point_cloud, env_grid) pairs
-    
-    # Create output directory for samples
-    os.makedirs('samples', exist_ok=True)
     
     model.train()
     losses = []
@@ -514,6 +618,19 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_
             if wandb_api_key:
                 wandb.log({'loss': avg_loss}, step=epoch)
             
+        # Save checkpoint periodically
+        if (epoch + 1) % checkpoint_every == 0:
+            checkpoint_path = os.path.join('checkpoints', f'checkpoint_epoch_{epoch+1}.pt')
+            torch.save({
+                'epoch': epoch + 1,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': avg_loss,
+                'vis_samples': vis_samples,
+                'losses': losses
+            }, checkpoint_path)
+            print(f"Saved checkpoint to {checkpoint_path}")
+            
         # Generate samples periodically using fixed training samples
         if (epoch + 1) % sample_every == 0:
             model.eval()
@@ -528,27 +645,22 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_
                     # Move to device
                     env_grid = env_grid.to(model.device)
                     
-                    # Save and log environment grid
-                    env_save_path = os.path.join(epoch_dir, f'env_{i+1}.png')
-                    visualize_environment_grid(env_grid.squeeze(0).cpu().numpy(), f'Environment {i+1}', env_save_path)
-                    if wandb_api_key:
-                        wandb.log({f'epoch_{epoch+1}/env_{i+1}': wandb.Image(env_save_path)})
-                    
                     # Generate sample
                     generated_brt = model.sample(env_grid.unsqueeze(0), num_samples=1)
                     generated_brt = generated_brt[0].cpu().numpy()  # Remove batch dimension
                     
-                    # Save and log generated point cloud
-                    pc_save_path = os.path.join(epoch_dir, f'generated_pc_{i+1}.png')
-                    visualize_point_cloud(generated_brt, f'Generated Point Cloud {i+1}', pc_save_path, dataset)
+                    # Create comparison visualization
+                    comparison_save_path = os.path.join(epoch_dir, f'comparison_{i+1}.png')
+                    visualize_comparison(
+                        true_pc.cpu().numpy(),
+                        generated_brt,
+                        env_grid.squeeze(0).cpu().numpy(),
+                        f'Sample {i+1} Comparison',
+                        comparison_save_path,
+                        dataset
+                    )
                     if wandb_api_key:
-                        wandb.log({f'epoch_{epoch+1}/generated_pc_{i+1}': wandb.Image(pc_save_path)})
-                    
-                    # Save and log true point cloud for comparison
-                    true_pc_save_path = os.path.join(epoch_dir, f'true_pc_{i+1}.png')
-                    visualize_point_cloud(true_pc.cpu().numpy(), f'True Point Cloud {i+1}', true_pc_save_path, dataset)
-                    if wandb_api_key:
-                        wandb.log({f'epoch_{epoch+1}/true_pc_{i+1}': wandb.Image(true_pc_save_path)})
+                        wandb.log({f'epoch_{epoch+1}/comparison_{i+1}': wandb.Image(comparison_save_path)})
                     
                     # Start from pure noise
                     x_t = torch.randn(1, model.num_points, model.state_dim).to(model.device)
@@ -570,11 +682,17 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_
                             points_sequence.append(x_t[0].cpu().numpy())
                             titles.append(f't={t}')
                     
-                    # Create and save denoising process visualization
-                    denoising_save_path = os.path.join(epoch_dir, f'denoising_{i+1}.png')
-                    visualize_denoising_process(points_sequence, titles, denoising_save_path, dataset)
+                    # Create and save denoising process visualization with true BRT
+                    denoising_save_path = os.path.join(epoch_dir, f'denoising_with_true_{i+1}.png')
+                    visualize_denoising_with_true(
+                        points_sequence,
+                        true_pc.cpu().numpy(),
+                        titles,
+                        denoising_save_path,
+                        dataset
+                    )
                     if wandb_api_key:
-                        wandb.log({f'epoch_{epoch+1}/denoising_{i+1}': wandb.Image(denoising_save_path)})
+                        wandb.log({f'epoch_{epoch+1}/denoising_with_true_{i+1}': wandb.Image(denoising_save_path)})
                     
                     print(f"Training sample {i+1}, generated BRT shape: {generated_brt.shape}")
             
@@ -630,6 +748,7 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         lr=args.lr,
         sample_every=args.sample_every,
+        checkpoint_every=args.checkpoint_every,
         wandb_api_key=args.wandb_api_key,
         wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity
