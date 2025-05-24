@@ -11,23 +11,33 @@ class BRTDataset(Dataset):
         """
         self.dataset_dir = dataset_dir
         self.sample_dirs = []
+        self.point_cloud_files = []  # List of (sample_dir, point_cloud_file) tuples
         
         # Find all sample directories and verify they have required files
         for d in sorted(os.listdir(dataset_dir)):
             if d.startswith('sample_'):
-                point_cloud_path = os.path.join(dataset_dir, d, 'point_cloud.npy')
                 env_grid_path = os.path.join(dataset_dir, d, 'environment_grid.npy')
                 
-                if os.path.exists(point_cloud_path) and os.path.exists(env_grid_path):
-                    self.sample_dirs.append(d)
+                if os.path.exists(env_grid_path):
+                    # Find all point cloud files for this sample
+                    point_cloud_files = [f for f in os.listdir(os.path.join(dataset_dir, d)) 
+                                       if f.startswith('point_cloud_') and f.endswith('.npy')]
+                    
+                    if point_cloud_files:
+                        self.sample_dirs.append(d)
+                        # Add all point cloud files for this sample
+                        for pc_file in point_cloud_files:
+                            self.point_cloud_files.append((d, pc_file))
+                    else:
+                        print(f"Warning: No point cloud files found in {d}")
                 else:
-                    print(f"Warning: Skipping {d} due to missing files")
+                    print(f"Warning: Skipping {d} due to missing environment_grid.npy")
         
-        if not self.sample_dirs:
+        if not self.point_cloud_files:
             raise ValueError("No valid samples found in dataset directory")
         
         # Load first sample to determine dimensions
-        first_point_cloud = np.load(os.path.join(dataset_dir, self.sample_dirs[0], 'point_cloud.npy'))
+        first_point_cloud = np.load(os.path.join(dataset_dir, self.point_cloud_files[0][0], self.point_cloud_files[0][1]))
         first_env = np.load(os.path.join(dataset_dir, self.sample_dirs[0], 'environment_grid.npy'))
         
         self.num_points = first_point_cloud.shape[0]  # N points
@@ -37,13 +47,13 @@ class BRTDataset(Dataset):
         # Compute normalization statistics
         self.compute_normalization_stats()
         
-        print(f"Found {len(self.sample_dirs)} valid samples")
+        print(f"Found {len(self.sample_dirs)} environments with {len(self.point_cloud_files)} total point clouds")
         
     def compute_normalization_stats(self):
         """Compute mean and std for point cloud normalization"""
         all_points = []
-        for d in self.sample_dirs:
-            points = np.load(os.path.join(self.dataset_dir, d, 'point_cloud.npy'))
+        for sample_dir, pc_file in self.point_cloud_files:
+            points = np.load(os.path.join(self.dataset_dir, sample_dir, pc_file))
             all_points.append(points)
         
         all_points = np.concatenate(all_points, axis=0)
@@ -66,13 +76,13 @@ class BRTDataset(Dataset):
         return points * self.points_std + self.points_mean
     
     def __len__(self):
-        return len(self.sample_dirs)
+        return len(self.point_cloud_files)
     
     def __getitem__(self, idx):
-        sample_dir = self.sample_dirs[idx]
+        sample_dir, pc_file = self.point_cloud_files[idx]
         
         # Load point cloud and environment
-        point_cloud = np.load(os.path.join(self.dataset_dir, sample_dir, 'point_cloud.npy'))
+        point_cloud = np.load(os.path.join(self.dataset_dir, sample_dir, pc_file))
         env_grid = np.load(os.path.join(self.dataset_dir, sample_dir, 'environment_grid.npy'))
         
         # Convert to torch tensors and normalize point cloud

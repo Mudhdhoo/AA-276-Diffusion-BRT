@@ -6,16 +6,20 @@ import shutil
 from scipy.interpolate import interpn
 import csv
 
-def generate_point_cloud(value_function, n_points):
+def generate_point_cloud(value_function, n_points, seed=None):
     """
     Generate a point cloud from the value function where value_function[-1] <= 0
     using interpolation for better sampling. Ensures exactly n_points are returned.
     Args:
         value_function: 4D array (time_steps, x, y, z)
         n_points: number of points to sample
+        seed: random seed for reproducibility
     Returns:
         points: Nx3 array of points
     """
+    if seed is not None:
+        np.random.seed(seed)
+    
     # Get the last timestep
     last_timestep = value_function[-1]
     
@@ -63,7 +67,7 @@ def generate_point_cloud(value_function, n_points):
     
     return valid_points
 
-def process_dataset(dataset_dir, output_dir, n_points):
+def process_dataset(dataset_dir, output_dir, n_points, clouds_per_sample):
     """
     Process all samples in the dataset directory
     """
@@ -72,6 +76,10 @@ def process_dataset(dataset_dir, output_dir, n_points):
     results = []
     missing_count = 0
     missing_samples = []
+    
+    # Set global seed
+    np.random.seed(42)
+    
     for sample_dir in tqdm(sample_dirs, desc="Processing samples"):
         sample_output_dir = os.path.join(output_dir, sample_dir)
         os.makedirs(sample_output_dir, exist_ok=True)
@@ -81,29 +89,39 @@ def process_dataset(dataset_dir, output_dir, n_points):
             missing_samples.append(sample_dir)
             continue
         value_function = np.load(value_function_path)
-        points = generate_point_cloud(value_function, n_points)
-        np.save(os.path.join(sample_output_dir, 'point_cloud.npy'), points)
+        
+        # Generate multiple point clouds with different seeds
+        for i in range(clouds_per_sample):
+            # Use global seed + i to get different but deterministic sampling
+            points = generate_point_cloud(value_function, n_points, seed=42 + i)
+            np.save(os.path.join(sample_output_dir, f'point_cloud_{i}.npy'), points)
+        
+        # Copy environment files
         for file in ['environment_grid.npy', 'environment.png']:
             src = os.path.join(dataset_dir, sample_dir, file)
             dst = os.path.join(sample_output_dir, file)
             if os.path.exists(src):
                 shutil.copy2(src, dst)
+        
         results.append({
             'sample_id': sample_dir,
-            'num_points': len(points),
+            'num_points': n_points,
+            'num_clouds': clouds_per_sample,
             'value_function_shape': str(value_function.shape),
-            'point_cloud_shape': str(points.shape)
+            'point_cloud_shape': f'(n_points, 3)'
         })
+    
     # Save results to CSV
     csv_path = os.path.join(output_dir, 'results.csv')
     with open(csv_path, 'w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=['sample_id', 'num_points', 'value_function_shape', 'point_cloud_shape'])
+        writer = csv.DictWriter(f, fieldnames=['sample_id', 'num_points', 'num_clouds', 'value_function_shape', 'point_cloud_shape'])
         writer.writeheader()
         writer.writerows(results)
         # Add a summary row for missing samples
         writer.writerow({
             'sample_id': f'MISSING ({missing_count})',
             'num_points': '',
+            'num_clouds': '',
             'value_function_shape': '',
             'point_cloud_shape': ''
         })
@@ -111,6 +129,7 @@ def process_dataset(dataset_dir, output_dir, n_points):
             writer.writerow({
                 'sample_id': 'Missing sample list:',
                 'num_points': ', '.join(missing_samples),
+                'num_clouds': '',
                 'value_function_shape': '',
                 'point_cloud_shape': ''
             })
@@ -120,10 +139,11 @@ def main():
     parser.add_argument('--dataset_dir', type=str, default='dataset_64', help='Path to input dataset directory')
     parser.add_argument('--output_dir', type=str, default='point_cloud_dataset', help='Path to output directory')
     parser.add_argument('--n_points', type=int, default=2048, help='Number of points to sample per cloud')
+    parser.add_argument('--clouds_per_sample', type=int, default=1, help='Number of point clouds to generate per sample')
     
     args = parser.parse_args()
     
-    process_dataset(args.dataset_dir, args.output_dir, args.n_points)
+    process_dataset(args.dataset_dir, args.output_dir, args.n_points, args.clouds_per_sample)
 
 if __name__ == '__main__':
     main()
