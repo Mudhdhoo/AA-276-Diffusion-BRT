@@ -18,7 +18,7 @@ DEFAULT_ENV_HEIGHT = 10
 DEFAULT_NUM_OBSTACLES = 3
 
 # Dataset parameters
-NUM_SAMPLES = 600  # Number of examples to generate
+NUM_SAMPLES = 10000  # Number of examples to generate
 GLOBAL_SEED = 42  # Global random seed for reproducibility
 
 # Obstacle parameters

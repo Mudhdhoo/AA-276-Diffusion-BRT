@@ -128,12 +128,12 @@ def process_sample(sample_id, output_dir, key):
     env.set_random_obstacles(num_obstacles, key=key)
         
     # Define file paths
-    env_plot_path = os.path.join(sample_dir, ENVIRONMENT_PLOT_NAME)
+    #env_plot_path = os.path.join(sample_dir, ENVIRONMENT_PLOT_NAME)
     env_grid_path = os.path.join(sample_dir, ENVIRONMENT_GRID_NAME)
     value_function_path = os.path.join(sample_dir, VALUE_FUNCTION_NAME)
     
     # Save environment plot
-    save_environment_plot(env, env_plot_path)
+    #save_environment_plot(env, env_plot_path)
     
     # Setup grid and dynamics
     grid = hj.Grid.from_lattice_parameters_and_boundary_conditions(
@@ -165,7 +165,7 @@ def process_sample(sample_id, output_dir, key):
         'simulation_time_horizon': float(final_time) if converged else None,
         'num_obstacles': int(num_obstacles[0]),  # Convert from JAX array to int
         'env_grid_path': env_grid_path,
-        'env_plot_path': env_plot_path,
+        'env_plot_path': None,
         'timestamp': datetime.now().isoformat()
     }
     
