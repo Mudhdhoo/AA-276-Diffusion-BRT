@@ -14,7 +14,7 @@ from mpl_toolkits.mplot3d import Axes3D
 def parse_args():
     parser = argparse.ArgumentParser(description='Train BRT Diffusion Model')
     parser.add_argument('--dataset_dir', type=str, 
-                      default='/Users/malte/AA-276-Diffusion-BRT/dataset/outputs/16_May_2025_20_36 (64x64x64)_pointcloud_2000',
+                      default='~/AA-276-Diffusion-BRT/dataset/outputs/16_May_2025_20_36 (64x64x64)_pointcloud_2000',
                       help='Path to dataset directory containing sample_* folders')
     parser.add_argument('--num_epochs', type=int, default=2000,
                       help='Number of training epochs')
