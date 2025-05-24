@@ -7,12 +7,13 @@ channels:
 dependencies:
   - python=3.10
   - pip
-  - cuda-toolkit=12.2
-  - numpy>=1.24.0
-  - matplotlib>=3.7.0
-  - tqdm>=4.65.0
+  - cudatoolkit=12.2
+  - cudnn=8.9
+  - numpy=1.24.3
+  - matplotlib=3.7.2
+  - tqdm=4.65.0
   - pip:
-    - "jax[cuda12_pip]>=0.4.13"
-    - "jaxlib[cuda12_pip]>=0.4.13"
-    - hj-reachability>=0.1.0
-    - optax>=0.1.7 
+    - "jax[cuda12_pip]==0.4.20"
+    - "jaxlib[cuda12_pip]==0.4.20"
+    - hj-reachability==0.1.0
+    - optax==0.1.7 
