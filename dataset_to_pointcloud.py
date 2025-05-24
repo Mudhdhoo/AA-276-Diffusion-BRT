@@ -117,9 +117,9 @@ def process_dataset(dataset_dir, output_dir, n_points):
 
 def main():
     parser = argparse.ArgumentParser(description='Convert value functions to point clouds')
-    parser.add_argument('--dataset_dir', type=str, required=True, help='Path to input dataset directory')
-    parser.add_argument('--output_dir', type=str, required=True, help='Path to output directory')
-    parser.add_argument('--n_points', type=int, required=True, help='Number of points to sample per cloud')
+    parser.add_argument('--dataset_dir', type=str, default='dataset_64', help='Path to input dataset directory')
+    parser.add_argument('--output_dir', type=str, default='point_cloud_dataset', help='Path to output directory')
+    parser.add_argument('--n_points', type=int, default=2048, help='Number of points to sample per cloud')
     
     args = parser.parse_args()
     

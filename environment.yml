@@ -22,4 +22,5 @@ dependencies:
     - jaxlib
     - hj_reachability
     - pillow
+    - wandb
 

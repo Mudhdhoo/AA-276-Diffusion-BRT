@@ -59,7 +59,6 @@ notes.txt
 test.py
 
 runs/
-models/
 results/
 
 *.png
