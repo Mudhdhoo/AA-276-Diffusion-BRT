@@ -1,0 +1,14 @@
+# Core numerical and scientific computing
+jax[cuda12_pip]>=0.4.13
+jaxlib[cuda12_pip]>=0.4.13
+numpy>=1.24.0
+matplotlib>=3.7.0
+
+# HJ Reachability
+hj-reachability>=0.1.0
+
+# Progress bars
+tqdm>=4.65.0
+
+# Optional: for better performance with JAX
+optax>=0.1.7 
