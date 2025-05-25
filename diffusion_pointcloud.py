@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from torch.utils.data import DataLoader, random_split
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from tqdm import tqdm
 import os
 import argparse
@@ -13,7 +14,7 @@ from loguru import logger
 def parse_args():
     parser = argparse.ArgumentParser(description='Train BRT Diffusion Model')
     parser.add_argument('--dataset_dir', type=str, 
-                      default='point_cloud_dataset',
+                      default='~/point_cloud_dataset_4000',
                       help='Path to dataset directory containing sample_* folders')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                       help='Device to use for training (cuda/cpu)')
@@ -33,6 +34,12 @@ def parse_args():
                       help='Training batch size')
     parser.add_argument('--lr', type=float, default=2e-4,
                       help='Learning rate')
+    parser.add_argument('--lr_min', type=float, default=1e-6,
+                      help='Minimum learning rate for cosine annealing')
+    parser.add_argument('--lr_restart_period', type=int, default=100,
+                      help='Initial restart period (T_0) for cosine annealing warm restarts')
+    parser.add_argument('--lr_restart_mult', type=int, default=2,
+                      help='Restart period multiplier (T_mult) for cosine annealing warm restarts')
     parser.add_argument('--sample_every', type=int, default=100,
                       help='Generate samples every N epochs')
     parser.add_argument('--checkpoint_every', type=int, default=100,
@@ -43,16 +50,16 @@ def parse_args():
                       help='Number of diffusion timesteps')
     parser.add_argument("--beta_start", type=float, default=1e-4,
                       help="Beta start for the beta schedule")
-    parser.add_argument("--beta_end", type=float, default=0.02,
+    parser.add_argument("--beta_end", type=float, default=0.005,
                       help="Beta end for the beta schedule")
     parser.add_argument('--null_conditioning_prob', type=float, default=0.15,
                       help='Probability of using null conditioning during training for CFG')
-    parser.add_argument('--guidance_scale', type=float, default=3.0,
+    parser.add_argument('--guidance_scale', type=float, default=1.5,
                       help='Guidance scale for classifier-free guidance during sampling')
     return parser.parse_args()
 
 
-def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_every=10, checkpoint_every=100, wandb_api_key=None, wandb_project='brt-diffusion', wandb_entity=None, guidance_scale=1.0):
+def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=1e-6, lr_restart_period=100, lr_restart_mult=2, sample_every=10, checkpoint_every=100, wandb_api_key=None, wandb_project='brt-diffusion', wandb_entity=None, guidance_scale=1.0, beta_start=1e-4, beta_end=0.005):
     """Training loop for the diffusion model"""
     # Initialize wandb
     if wandb_api_key:
@@ -62,6 +69,9 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_
             'num_epochs': num_epochs,
             'batch_size': batch_size,
             'learning_rate': lr,
+            'lr_min': lr_min,
+            'lr_restart_period': lr_restart_period,
+            'lr_restart_mult': lr_restart_mult,
             'sample_every': sample_every,
             'checkpoint_every': checkpoint_every,
             'num_timesteps': model.num_timesteps,
@@ -70,7 +80,9 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_
             'points_mean': dataset.points_mean.tolist(),
             'points_std': dataset.points_std.tolist(),
             'null_conditioning_prob': model.null_conditioning_prob,
-            'guidance_scale': guidance_scale
+            'guidance_scale': guidance_scale,
+            'beta_start': beta_start,
+            'beta_end': beta_end
         })
 
     # Create directories for checkpoints and samples
@@ -83,6 +95,7 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=lr_restart_period, T_mult=lr_restart_mult, eta_min=lr_min)
     
     # Create fixed training samples for consistent evaluation
     num_vis_samples = 8  # Increased from 4 to 8 samples
@@ -275,6 +288,9 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, sample_
             
             model.train()
             print()  # Add newline for better readability
+        
+        # Step the learning rate scheduler
+        scheduler.step()
     
     if wandb_api_key:
         wandb.finish()
@@ -317,7 +333,7 @@ if __name__ == "__main__":
     print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(f"Dataset dimensions: {NUM_POINTS} points, {STATE_DIM}D coordinates, {ENV_SIZE}x{ENV_SIZE} environment")
     print(f"Training for {args.num_epochs} epochs with batch size {args.batch_size}")
-    print(f"Learning rate: {args.lr}")
+    print(f"Learning rate: {args.lr} -> {args.lr_min} (cosine annealing warm restarts, T_0={args.lr_restart_period}, T_mult={args.lr_restart_mult})")
     print(f"Sampling every {args.sample_every} epochs")
     print(f"Classifier-free guidance: null_conditioning_prob={args.null_conditioning_prob}, guidance_scale={args.guidance_scale}")
     
@@ -328,12 +344,17 @@ if __name__ == "__main__":
         num_epochs=args.num_epochs, 
         batch_size=args.batch_size,
         lr=args.lr,
+        lr_min=args.lr_min,
+        lr_restart_period=args.lr_restart_period,
+        lr_restart_mult=args.lr_restart_mult,
         sample_every=args.sample_every,
         checkpoint_every=args.checkpoint_every,
         wandb_api_key=args.wandb_api_key,
         wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity,
-        guidance_scale=args.guidance_scale
+        guidance_scale=args.guidance_scale,
+        beta_start=args.beta_start,
+        beta_end=args.beta_end
     )
     
     # Save the trained model and visualization samples

@@ -87,7 +87,7 @@ class BRTDataset(Dataset):
         # Load point cloud and environment
         point_cloud = np.load(os.path.join(self.dataset_dir, sample_dir, pc_file))
         env_grid = np.load(os.path.join(self.dataset_dir, sample_dir, 'environment_grid.npy'))
-        
+
         # Convert to torch tensors and normalize point cloud
         point_cloud = torch.FloatTensor(self.normalize_points(point_cloud))
         env_grid = torch.FloatTensor(env_grid)
