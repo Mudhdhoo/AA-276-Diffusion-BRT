@@ -5,40 +5,43 @@ from torch.utils.data import Dataset
 
 class BRTDataset(Dataset):
     """Dataset for BRT point clouds and environments"""
-    def __init__(self, dataset_dir):
+    def __init__(self, dataset_dir, split="train"):
         """
-        dataset_dir: Path to the dataset directory containing sample_* folders
+        Args:
+            dataset_dir: Directory containing the dataset
+            split: One of "train", "val", or "test"
         """
         self.dataset_dir = dataset_dir
-        self.sample_dirs = []
-        self.point_cloud_files = []  # List of (sample_dir, point_cloud_file) tuples
+        self.split = split
         
-        # Find all sample directories and verify they have required files
-        for d in sorted(os.listdir(dataset_dir)):
-            if d.startswith('sample_'):
-                env_grid_path = os.path.join(dataset_dir, d, 'environment_grid.npy')
-                
-                if os.path.exists(env_grid_path):
-                    # Find all point cloud files for this sample
-                    point_cloud_files = [f for f in os.listdir(os.path.join(dataset_dir, d)) 
-                                       if f.startswith('point_cloud_') and f.endswith('.npy')]
-                    
-                    if point_cloud_files:
-                        self.sample_dirs.append(d)
-                        # Add all point cloud files for this sample
-                        for pc_file in point_cloud_files:
-                            self.point_cloud_files.append((d, pc_file))
-                    else:
-                        print(f"Warning: No point cloud files found in {d}")
-                else:
-                    print(f"Warning: Skipping {d} due to missing environment_grid.npy")
+        # Get all sample directories
+        self.sample_dirs = sorted([d for d in os.listdir(dataset_dir) if d.startswith('sample_')])
         
-        if not self.point_cloud_files:
-            raise ValueError("No valid samples found in dataset directory")
+        # Split into train/val/test (80/10/10)
+        n_samples = len(self.sample_dirs)
+        n_train = int(0.8 * n_samples)
+        n_val = int(0.1 * n_samples)
         
-        # Load first sample to determine dimensions
-        first_point_cloud = np.load(os.path.join(dataset_dir, self.point_cloud_files[0][0], self.point_cloud_files[0][1]))
-        first_env = np.load(os.path.join(dataset_dir, self.sample_dirs[0], 'environment_grid.npy'))
+        if split == "train":
+            self.sample_dirs = self.sample_dirs[:n_train]
+        elif split == "val":
+            self.sample_dirs = self.sample_dirs[n_train:n_train + n_val]
+        elif split == "test":
+            self.sample_dirs = self.sample_dirs[n_train + n_val:]
+        else:
+            raise ValueError(f"Invalid split: {split}. Must be one of 'train', 'val', or 'test'")
+        
+        # Get all point cloud files
+        self.point_cloud_files = []
+        for sample_dir in self.sample_dirs:
+            pc_files = [f for f in os.listdir(os.path.join(dataset_dir, sample_dir)) if f.startswith('point_cloud_')]
+            for pc_file in pc_files:
+                self.point_cloud_files.append((sample_dir, pc_file))
+        
+        # Load first point cloud and environment to get dimensions
+        first_sample_dir, first_pc_file = self.point_cloud_files[0]
+        first_point_cloud = np.load(os.path.join(dataset_dir, first_sample_dir, first_pc_file))
+        first_env = np.load(os.path.join(dataset_dir, first_sample_dir, 'environment_grid.npy'))
         
         self.num_points = first_point_cloud.shape[0]  # N points
         self.state_dim = first_point_cloud.shape[1]   # 3D coordinates
@@ -47,7 +50,7 @@ class BRTDataset(Dataset):
         # Compute normalization statistics
         self.compute_normalization_stats()
         
-        print(f"Found {len(self.sample_dirs)} environments with {len(self.point_cloud_files)} total point clouds")
+        print(f"Found {len(self.sample_dirs)} environments with {len(self.point_cloud_files)} total point clouds in {split} split")
         
     def compute_normalization_stats(self):
         """Compute mean and std for point cloud normalization"""
