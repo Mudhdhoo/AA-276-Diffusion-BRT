@@ -168,6 +168,16 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
             }, checkpoint_path)
             print(f"Saved checkpoint to {checkpoint_path}")
             
+            # Save checkpoint to wandb
+            if wandb_api_key:
+                artifact = wandb.Artifact(
+                    name=f'model-checkpoint-epoch-{epoch+1}',
+                    type='model',
+                    description=f'Model checkpoint at epoch {epoch+1}'
+                )
+                artifact.add_file(checkpoint_path)
+                wandb.log_artifact(artifact)
+            
         # Generate samples periodically using fixed training and validation samples
         if (epoch + 1) % sample_every == 0:
             model.eval()
