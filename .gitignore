@@ -90,3 +90,5 @@ tensorboard/
 # all directories containing .bmp files
 **/*.bmp
 
+checkpoints/
+

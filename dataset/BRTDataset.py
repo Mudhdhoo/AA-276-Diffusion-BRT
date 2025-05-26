@@ -2,6 +2,7 @@ import os
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+from loguru import logger
 
 class BRTDataset(Dataset):
     """Dataset for BRT point clouds and environments"""
@@ -50,7 +51,7 @@ class BRTDataset(Dataset):
         # Compute normalization statistics
         self.compute_normalization_stats()
         
-        print(f"Found {len(self.sample_dirs)} environments with {len(self.point_cloud_files)} total point clouds in {split} split")
+        logger.info(f"Found {len(self.sample_dirs)} environments with {len(self.point_cloud_files)} total point clouds in {split} split")
         
     def compute_normalization_stats(self):
         """Compute mean and std for point cloud normalization"""
