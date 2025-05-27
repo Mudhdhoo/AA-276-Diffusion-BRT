@@ -36,9 +36,9 @@ def visualize_point_cloud(points, title=None, save_path=None, dataset=None):
         points = dataset.denormalize_points(points)
     
     # Scale coordinates to match environment dimensions
-    x = points[:, 0]  # Scale x from [0,64] to [0,10]
-    y = points[:, 1]  # Scale y from [0,64] to [0,10]
-    theta = points[:, 2]  # Scale theta from [0,64] to [-π,π]
+    x = points[:, 0]
+    y = points[:, 1]
+    theta = points[:, 2]
     
     # Check if we have a 4th dimension
     if points.shape[1] > 3:
@@ -113,9 +113,9 @@ def visualize_denoising_process(points_sequence, titles, save_path=None, dataset
             points = dataset.denormalize_points(points)
         
         # Scale coordinates to match environment dimensions
-        x = points[:, 0] * (10.0 / 64.0)  # Scale x from [0,64] to [0,10]
-        y = points[:, 1] * (10.0 / 64.0)  # Scale y from [0,64] to [0,10]
-        theta = points[:, 2] * (2 * np.pi / 64.0) - np.pi  # Scale theta from [0,64] to [-π,π]
+        x = points[:, 0]
+        y = points[:, 1]
+        theta = points[:, 2]
         
         ax.scatter(x, y, theta, s=2, alpha=0.5)
         ax.set_title(title)
@@ -156,9 +156,9 @@ def visualize_comparison(true_pc, generated_pc, env_grid, title=None, save_path=
     ax2 = fig.add_subplot(132, projection='3d')
     if dataset is not None:
         true_pc = dataset.denormalize_points(true_pc)
-    x = true_pc[:, 0] * (10.0 / 64.0)
-    y = true_pc[:, 1] * (10.0 / 64.0)
-    theta = true_pc[:, 2] * (2 * np.pi / 64.0) - np.pi
+    x = true_pc[:, 0]
+    y = true_pc[:, 1]
+    theta = true_pc[:, 2]
     
     # Check if we have a 4th dimension
     if true_pc.shape[1] > 3:
@@ -189,9 +189,9 @@ def visualize_comparison(true_pc, generated_pc, env_grid, title=None, save_path=
     ax3 = fig.add_subplot(133, projection='3d')
     if dataset is not None:
         generated_pc = dataset.denormalize_points(generated_pc)
-    x = generated_pc[:, 0] * (10.0 / 64.0)
-    y = generated_pc[:, 1] * (10.0 / 64.0)
-    theta = generated_pc[:, 2] * (2 * np.pi / 64.0) - np.pi
+    x = generated_pc[:, 0]
+    y = generated_pc[:, 1]
+    theta = generated_pc[:, 2]
     
     # Check if we have a 4th dimension
     if generated_pc.shape[1] > 3:
@@ -240,9 +240,9 @@ def visualize_denoising_with_true(points_sequence, true_pc, titles, save_path=No
         if dataset is not None:
             points = dataset.denormalize_points(points)
         
-        x = points[:, 0] * (10.0 / 64.0)
-        y = points[:, 1] * (10.0 / 64.0)
-        theta = points[:, 2] * (2 * np.pi / 64.0) - np.pi
+        x = points[:, 0]
+        y = points[:, 1]
+        theta = points[:, 2]
         
         # Check if we have a 4th dimension
         if points.shape[1] > 3:
@@ -273,9 +273,9 @@ def visualize_denoising_with_true(points_sequence, true_pc, titles, save_path=No
     ax_true = fig.add_subplot(1, n_steps + 1, n_steps + 1, projection='3d')
     if dataset is not None:
         true_pc = dataset.denormalize_points(true_pc)
-    x = true_pc[:, 0] * (10.0 / 64.0)
-    y = true_pc[:, 1] * (10.0 / 64.0)
-    theta = true_pc[:, 2] * (2 * np.pi / 64.0) - np.pi
+    x = true_pc[:, 0]
+    y = true_pc[:, 1]
+    theta = true_pc[:, 2]
     
     # Check if we have a 4th dimension
     if true_pc.shape[1] > 3:
