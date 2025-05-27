@@ -172,9 +172,9 @@ def generate_denoising_gif(model, dataset, sample_idx, num_frames=50, save_dir="
     
     # Save animation
     os.makedirs(save_dir, exist_ok=True)
-    anim.save(os.path.join(save_dir, f"{sample_idx}.gif"), writer=PillowWriter(fps=10))
+    anim.save(os.path.join(save_dir, f'{sample_idx}.gif'), writer=PillowWriter(fps=10))
     plt.close()
-    logger.info(f"Saved GIF to {os.path.join(save_dir, f"{sample_idx}.gif")}")
+    logger.info(f"Saved GIF to {os.path.join(save_dir, f'{sample_idx}.gif')}")
 
 def main():
     # Set device
@@ -184,7 +184,7 @@ def main():
     args = parse_args()
     
     # Load dataset
-    dataset_dir = "../point_cloud_dataset_4000"  # Update this path as needed
+    dataset_dir = "point_cloud_dataset_4000"  # Update this path as needed
     dataset = BRTDataset(dataset_dir, split="val")
     
     # Create model
