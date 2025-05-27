@@ -54,30 +54,60 @@ class BRTDataset(Dataset):
         logger.info(f"Found {len(self.sample_dirs)} environments with {len(self.point_cloud_files)} total point clouds in {split} split")
         
     def compute_normalization_stats(self):
-        """Compute mean and std for point cloud normalization"""
+        """Compute normalization stats for point cloud
+        First step: min-max scaling per channel
+        x: [0, 10]
+        y: [0, 10]
+        theta: [-pi, pi]
+        value: min-max from dataset
+        
+        Second step: fixed mean-std normalization using stats from entire training set
+        """
         all_points = []
         for sample_dir, pc_file in self.point_cloud_files:
             points = np.load(os.path.join(self.dataset_dir, sample_dir, pc_file))
             all_points.append(points)
         
         all_points = np.concatenate(all_points, axis=0)
-        self.points_mean = np.mean(all_points, axis=0)
-        self.points_std = np.std(all_points, axis=0)
         
+        # Step 1: Min-max ranges for initial scaling
+        self.points_min = np.array([0.0, 0.0, -np.pi])
+        self.points_max = np.array([10.0, 10.0, np.pi])
+        
+        # For value (4th dimension if it exists), use min-max from dataset
+        if all_points.shape[1] == 4:
+            self.points_min = np.append(self.points_min, np.min(all_points[:, 3]))
+            self.points_max = np.append(self.points_max, np.max(all_points[:, 3]))
+        
+        # Step 2: Compute fixed mean and std from entire training set
+        # First normalize the points to [0,1] range
+        normalized_points = (all_points - self.points_min) / (self.points_max - self.points_min)
+        self.points_mean = np.mean(normalized_points, axis=0)  # Fixed mean per channel
+        self.points_std = np.std(normalized_points, axis=0)    # Fixed std per channel
         # Ensure std is not zero
         self.points_std = np.maximum(self.points_std, 1e-6)
         
         print("Point cloud normalization stats:")
+        print(f"Min-Max ranges:")
+        print(f"Min: {self.points_min}")
+        print(f"Max: {self.points_max}")
+        print(f"\nFixed normalization stats (computed from entire training set):")
         print(f"Mean: {self.points_mean}")
         print(f"Std: {self.points_std}")
     
     def normalize_points(self, points):
-        """Normalize point cloud coordinates"""
-        return (points - self.points_mean) / self.points_std
+        """Normalize point cloud coordinates using min-max scaling followed by fixed mean-std normalization"""
+        # First normalize to [0,1] range
+        normalized = (points - self.points_min) / (self.points_max - self.points_min)
+        # Then apply fixed mean-std normalization
+        return (normalized - self.points_mean) / self.points_std
     
     def denormalize_points(self, points):
         """Denormalize point cloud coordinates"""
-        return points * self.points_std + self.points_mean
+        # First undo fixed mean-std normalization
+        normalized = points * self.points_std + self.points_mean
+        # Then undo min-max scaling
+        return normalized * (self.points_max - self.points_min) + self.points_min
     
     def __len__(self):
         return len(self.point_cloud_files)
