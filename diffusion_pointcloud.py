@@ -10,6 +10,7 @@ from models.diffusion_modules import BRTDiffusionModel
 from dataset.BRTDataset import BRTDataset
 from utils.visualizations import visualize_comparison, visualize_denoising_with_true
 from loguru import logger
+from datetime import datetime
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train BRT Diffusion Model')
@@ -86,8 +87,11 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
         })
 
     # Create directories for checkpoints and samples
-    os.makedirs('checkpoints', exist_ok=True)
-    os.makedirs('samples', exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    checkpoint_dir = os.path.join('checkpoints', timestamp)
+    samples_dir = os.path.join('samples', timestamp)
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    os.makedirs(samples_dir, exist_ok=True)
     
     # Create dataloaders for train and validation
     train_dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -154,7 +158,7 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
             
         # Save checkpoint periodically
         if (epoch + 1) % checkpoint_every == 0:
-            checkpoint_path = os.path.join('checkpoints', f'checkpoint_epoch_{epoch+1}.pt')
+            checkpoint_path = os.path.join(checkpoint_dir, f'checkpoint_epoch_{epoch+1}.pt')
             torch.save({
                 'epoch': epoch + 1,
                 'model_state_dict': model.state_dict(),
@@ -164,7 +168,22 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
                 'vis_samples': vis_samples,
                 'val_vis_samples': val_vis_samples,
                 'train_losses': losses,
-                'val_losses': val_losses
+                'val_losses': val_losses,
+                'config': {
+                    'batch_size': batch_size,
+                    'learning_rate': lr,
+                    'lr_min': lr_min,
+                    'lr_restart_period': lr_restart_period,
+                    'lr_restart_mult': lr_restart_mult,
+                    'num_timesteps': model.num_timesteps,
+                    'num_points': model.num_points,
+                    'env_size': model.env_size,
+                    'null_conditioning_prob': model.null_conditioning_prob,
+                    'guidance_scale': guidance_scale,
+                    'beta_start': beta_start,
+                    'beta_end': beta_end,
+                    'timestamp': timestamp
+                }
             }, checkpoint_path)
             print(f"Saved checkpoint to {checkpoint_path}")
             
@@ -185,7 +204,7 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
                 print(f"\nGenerating samples at epoch {epoch+1}:")
                 
                 # Create epoch-specific directory
-                epoch_dir = os.path.join('samples', f'epoch_{epoch+1}')
+                epoch_dir = os.path.join(samples_dir, f'epoch_{epoch+1}')
                 os.makedirs(epoch_dir, exist_ok=True)
                 
                 # Generate and plot training samples
@@ -305,6 +324,32 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
     if wandb_api_key:
         wandb.finish()
     
+    # Save the trained model and visualization samples
+    final_model_path = os.path.join('models', f'brt_diffusion_model_{timestamp}.pt')
+    os.makedirs('models', exist_ok=True)
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'vis_samples': vis_samples,
+        'val_vis_samples': val_vis_samples,
+        'train_losses': losses,
+        'val_losses': val_losses,
+        'config': {
+            'batch_size': batch_size,
+            'learning_rate': lr,
+            'lr_min': lr_min,
+            'lr_restart_period': lr_restart_period,
+            'lr_restart_mult': lr_restart_mult,
+            'num_timesteps': model.num_timesteps,
+            'num_points': model.num_points,
+            'env_size': model.env_size,
+            'null_conditioning_prob': model.null_conditioning_prob,
+            'guidance_scale': guidance_scale,
+            'beta_start': beta_start,
+            'beta_end': beta_end,
+            'timestamp': timestamp
+        }
+    }, final_model_path)
+    print(f"Model, visualization samples, and training losses saved to {final_model_path}")
     return losses, val_losses, vis_samples, val_vis_samples  # Return both training and validation samples
 
 
