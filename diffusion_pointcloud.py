@@ -87,9 +87,9 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
         })
 
     # Create directories for checkpoints and samples
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    checkpoint_dir = os.path.join('checkpoints', timestamp)
-    samples_dir = os.path.join('samples', timestamp)
+    run_name = wandb.run.name if wandb_api_key else datetime.now().strftime("%Y%m%d_%H%M%S")
+    checkpoint_dir = os.path.join('checkpoints', run_name)
+    samples_dir = os.path.join('samples', run_name)
     os.makedirs(checkpoint_dir, exist_ok=True)
     os.makedirs(samples_dir, exist_ok=True)
     
@@ -182,7 +182,7 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
                     'guidance_scale': guidance_scale,
                     'beta_start': beta_start,
                     'beta_end': beta_end,
-                    'timestamp': timestamp
+                    'run_name': run_name
                 }
             }, checkpoint_path)
             print(f"Saved checkpoint to {checkpoint_path}")
@@ -190,7 +190,7 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
             # Save checkpoint to wandb
             if wandb_api_key:
                 artifact = wandb.Artifact(
-                    name=f'model-checkpoint-epoch-{epoch+1}',
+                    name=f'model-checkpoint-{run_name}-epoch-{epoch+1}',
                     type='model',
                     description=f'Model checkpoint at epoch {epoch+1}'
                 )
@@ -325,7 +325,7 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
         wandb.finish()
     
     # Save the trained model and visualization samples
-    final_model_path = os.path.join('models', f'brt_diffusion_model_{timestamp}.pt')
+    final_model_path = os.path.join('models', f'brt_diffusion_model_{run_name}.pt')
     os.makedirs('models', exist_ok=True)
     torch.save({
         'model_state_dict': model.state_dict(),
@@ -346,7 +346,7 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
             'guidance_scale': guidance_scale,
             'beta_start': beta_start,
             'beta_end': beta_end,
-            'timestamp': timestamp
+            'run_name': run_name
         }
     }, final_model_path)
     print(f"Model, visualization samples, and training losses saved to {final_model_path}")
