@@ -47,7 +47,7 @@ def visualize_forward_process(model, x_start, env, dataset, timesteps_to_show=No
         theta = x_t_raw[:, 2] * (2 * np.pi / 64.0) - np.pi  # Scale theta from [0,64] to [-π,π]
         
         # Plot using scaled coordinate values
-        ax1.scatter(x, y, theta, c=theta, cmap='viridis', s=20, alpha=0.7)
+        ax1.scatter(x, y, theta, c=theta, cmap='viridis', s=8, alpha=0.7)
         ax1.set_title(f"{title} (Scaled)")
         ax1.set_xlabel('X Position (m)')
         ax1.set_ylabel('Y Position (m)')
@@ -60,7 +60,7 @@ def visualize_forward_process(model, x_start, env, dataset, timesteps_to_show=No
         # Row 2: Normalized coordinates (what model sees)
         ax2 = fig.add_subplot(3, num_timesteps, i + 1 + num_timesteps, projection='3d')
         ax2.scatter(x_t_norm[:, 0], x_t_norm[:, 1], x_t_norm[:, 2], 
-                   c=x_t_norm[:, 2], cmap='viridis', s=20, alpha=0.7)
+                   c=x_t_norm[:, 2], cmap='viridis', s=8, alpha=0.7)
         ax2.set_title(f"{title} (Normalized)")
         ax2.set_xlabel('X (normalized)')
         ax2.set_ylabel('Y (normalized)')
@@ -92,7 +92,7 @@ def main():
     print(f"Using device: {device}")
     
     # Load dataset
-    dataset_dir = "../point_cloud_dataset_4000"
+    dataset_dir = "../1070_4d_pointcloud_3000inside_1000outside_4cloudsperenv"
     dataset = BRTDataset(dataset_dir)
     print(f"Dataset loaded successfully!")
     print(f"Number of samples: {len(dataset)}")
