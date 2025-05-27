@@ -99,8 +99,8 @@ class BRTDataset(Dataset):
         """Normalize point cloud coordinates using min-max scaling to [-1,1] followed by fixed mean-std normalization"""
         # First normalize to [-1,1] range
         normalized = 2.0 * (points - self.points_min) / (self.points_max - self.points_min) - 1.0
-        
         # Then apply fixed mean-std normalization
+
         return (normalized - self.points_mean) / self.points_std
     
     def denormalize_points(self, points):

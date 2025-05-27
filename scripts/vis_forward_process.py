@@ -12,59 +12,119 @@ from models.diffusion_modules import BRTDiffusionModel
 from dataset.BRTDataset import BRTDataset
 
 def visualize_forward_process(model, x_start, env, dataset, timesteps_to_show=None, save_path="plots/forward_process.png"):
-    """Visualize the forward diffusion process at various timesteps using raw coordinate values"""
+    """Visualize the forward diffusion process at various timesteps using both normalized and raw coordinate values"""
     if timesteps_to_show is None:
         # Show process at these specific timesteps
         timesteps_to_show = [0, 100, 300, 500, 700, 900, 999]
     
     num_timesteps = len(timesteps_to_show)
-    fig = plt.figure(figsize=(20, 12))  # Increased height for 3 rows
+    fig = plt.figure(figsize=(25, 12))  # Increased width to accommodate moved colorbars
+    
+    # Adjust subplot spacing to ensure equal plot sizes
+    plt.subplots_adjust(left=0.05, right=0.85, top=0.95, bottom=0.05, wspace=0.3, hspace=0.3)
     
     # x_start is normalized data from dataset, convert to torch tensor
     x_start_torch = torch.FloatTensor(x_start).unsqueeze(0).to(model.device)
     
+    # Get value range for consistent coloring across all timesteps
+    x_start_raw = dataset.denormalize_points(x_start)
+    if x_start_raw.shape[1] >= 4:
+        value_min = x_start_raw[:, 3].min()
+        value_max = x_start_raw[:, 3].max()
+    else:
+        # Fallback if no 4th dimension
+        value_min, value_max = -1, 1
+    
     for i, t in enumerate(timesteps_to_show):
         if t == 0:
-            # Original data - denormalize to get raw values
-            x_t_raw = dataset.denormalize_points(x_start)
-            x_t_norm = x_start  # Normalized version
+            # Original data
+            x_t_norm = x_start  # Normalized version (what model sees)
+            x_t_raw = dataset.denormalize_points(x_start)  # Denormalized version
             title = f"Original (t=0)"
         else:
             # Apply forward diffusion to normalized data
             t_tensor = torch.tensor([t]).to(model.device)
             x_t_torch = model.q_sample(x_start_torch, t_tensor)
-            x_t_norm = x_t_torch.squeeze(0).cpu().numpy()  # Normalized version
-            # Denormalize to get raw coordinate values
+            x_t_norm = x_t_torch.squeeze(0).cpu().numpy()  # Normalized version with noise
+            # Denormalize the noisy normalized data to get raw coordinates
             x_t_raw = dataset.denormalize_points(x_t_norm)
             title = f"t={t}"
         
-        # Row 1: Scaled coordinates (environment-aligned)
+        # Row 1: Raw/Denormalized coordinates (after noise applied to normalized version)
         ax1 = fig.add_subplot(3, num_timesteps, i + 1, projection='3d')
         
-        # Scale coordinates to match environment dimensions
-        x = x_t_raw[:, 0] * (10.0 / 64.0)  # Scale x from [0,64] to [0,10]
-        y = x_t_raw[:, 1] * (10.0 / 64.0)  # Scale y from [0,64] to [0,10]
-        theta = x_t_raw[:, 2] * (2 * np.pi / 64.0) - np.pi  # Scale theta from [0,64] to [-π,π]
+        # Extract coordinates
+        x = x_t_raw[:, 0] 
+        y = x_t_raw[:, 1] 
+        theta = x_t_raw[:, 2]
         
-        # Plot using scaled coordinate values
-        ax1.scatter(x, y, theta, c=theta, cmap='viridis', s=8, alpha=0.7)
-        ax1.set_title(f"{title} (Scaled)")
+        # Use 4th dimension (value) for coloring if available
+        if x_t_raw.shape[1] >= 4:
+            colors = x_t_raw[:, 3]
+            colormap = 'RdYlBu_r'  # Red-Yellow-Blue colormap (red=high value, blue=low value)
+        else:
+            colors = theta
+            colormap = 'viridis'
+            
+        scatter1 = ax1.scatter(x, y, theta, c=colors, cmap=colormap, s=8, alpha=0.7, 
+                              vmin=value_min, vmax=value_max)
+        ax1.set_title(f"{title} (Raw)")
         ax1.set_xlabel('X Position (m)')
         ax1.set_ylabel('Y Position (m)')
         ax1.set_zlabel('θ (rad)')
-        # Set axis limits to match environment dimensions
+        # Set axis limits to match environment dimensions and force theta to [-pi, pi]
         ax1.set_xlim(0, 10)
         ax1.set_ylim(0, 10)
-        ax1.set_zlim(-np.pi, np.pi)
+        ax1.set_zlim(-np.pi, np.pi)  # Force exactly [-pi, pi] range
         
-        # Row 2: Normalized coordinates (what model sees)
+        # Add colorbar to first plot in row
+        if i == 0:
+            if x_t_raw.shape[1] >= 4:
+                cbar1 = plt.colorbar(scatter1, ax=ax1, shrink=0.5, pad=0.15)
+                cbar1.set_label('BRT Value')
+            else:
+                cbar1 = plt.colorbar(scatter1, ax=ax1, shrink=0.5, pad=0.15)
+                cbar1.set_label('θ (rad)')
+        
+        # Row 2: Normalized coordinates (what model sees during training)
         ax2 = fig.add_subplot(3, num_timesteps, i + 1 + num_timesteps, projection='3d')
-        ax2.scatter(x_t_norm[:, 0], x_t_norm[:, 1], x_t_norm[:, 2], 
-                   c=x_t_norm[:, 2], cmap='viridis', s=8, alpha=0.7)
+        
+        # Use 4th dimension for coloring in normalized space too
+        if x_t_norm.shape[1] >= 4:
+            colors_norm = x_t_norm[:, 3]
+            # Get normalization range for consistent coloring
+            norm_min = x_t_norm[:, 3].min() if t == 0 else None
+            norm_max = x_t_norm[:, 3].max() if t == 0 else None
+        else:
+            colors_norm = x_t_norm[:, 2]
+            norm_min, norm_max = None, None
+            
+        scatter2 = ax2.scatter(x_t_norm[:, 0], x_t_norm[:, 1], x_t_norm[:, 2], 
+                              c=colors_norm, cmap=colormap, s=8, alpha=0.7,
+                              vmin=norm_min, vmax=norm_max)
         ax2.set_title(f"{title} (Normalized)")
         ax2.set_xlabel('X (normalized)')
         ax2.set_ylabel('Y (normalized)')
-        ax2.set_zlabel('Z (normalized)')
+        ax2.set_zlabel('θ (normalized)')
+        ax2.set_xlim(-2.5, 2.5)
+        ax2.set_ylim(-2.5, 2.5)
+        ax2.set_zlim(-2.5, 2.5)
+        
+        # Set normalized theta limits to correspond to [-pi, pi] range
+        # Since theta is normalized from [-pi, pi] to the normalized range, we need to find what that maps to
+        raw_theta_min, raw_theta_max = -np.pi, np.pi
+        norm_theta_min = dataset.normalize_points(np.array([[0, 0, raw_theta_min, 0] if x_start.shape[1] >= 4 else [0, 0, raw_theta_min]]))[0, 2]
+        norm_theta_max = dataset.normalize_points(np.array([[0, 0, raw_theta_max, 0] if x_start.shape[1] >= 4 else [0, 0, raw_theta_max]]))[0, 2]
+        ax2.set_zlim(norm_theta_min, norm_theta_max)
+        
+        # Add colorbar to first plot in row
+        if i == 0:
+            if x_t_norm.shape[1] >= 4:
+                cbar2 = plt.colorbar(scatter2, ax=ax2, shrink=0.5, pad=0.15)
+                cbar2.set_label('BRT Value (normalized)')
+            else:
+                cbar2 = plt.colorbar(scatter2, ax=ax2, shrink=0.5, pad=0.15)
+                cbar2.set_label('θ (normalized)')
         
         # Row 3: Environment plot
         ax3 = fig.add_subplot(3, num_timesteps, i + 1 + 2*num_timesteps)
@@ -75,17 +135,19 @@ def visualize_forward_process(model, x_start, env, dataset, timesteps_to_show=No
         ax3.set_xlim(0, 10)
         ax3.set_ylim(0, 10)
         
-        if i == num_timesteps - 1:  # Add colorbar to last subplot
-            plt.colorbar(im, ax=ax3, shrink=0.8, label='Obstacle (1) / Free Space (0)')
+        # Add colorbar to last environment subplot
+        if i == num_timesteps - 1:
+            cbar3 = plt.colorbar(im, ax=ax3, shrink=0.5, pad=0.15)
+            cbar3.set_label('Obstacle (1) / Free Space (0)')
     
-    plt.tight_layout()
+    # Use subplots_adjust instead of tight_layout for better control
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.show()
 
 def main():
     """Main function to run the forward process visualization"""
-    print("Creating simplified BRT Diffusion Forward Process Visualization...")
+    print("Creating BRT Diffusion Forward Process Visualization...")
     
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -105,7 +167,7 @@ def main():
         num_points=dataset.num_points,
         num_timesteps=1000,
         beta_start=1e-4,
-        beta_end=0.005,
+        beta_end=0.008,
         device=device
     )
     model.to(device)
@@ -125,19 +187,24 @@ def main():
     print(f"Raw point cloud coordinate ranges:")
     print(f"  X: [{point_cloud_raw[:, 0].min():.3f}, {point_cloud_raw[:, 0].max():.3f}]")
     print(f"  Y: [{point_cloud_raw[:, 1].min():.3f}, {point_cloud_raw[:, 1].max():.3f}]")
-    print(f"  Z: [{point_cloud_raw[:, 2].min():.3f}, {point_cloud_raw[:, 2].max():.3f}]")
+    print(f"  θ: [{point_cloud_raw[:, 2].min():.3f}, {point_cloud_raw[:, 2].max():.3f}]")
+    if point_cloud_raw.shape[1] >= 4:
+        print(f"  Value: [{point_cloud_raw[:, 3].min():.3f}, {point_cloud_raw[:, 3].max():.3f}]")
     
-    # Show scaled coordinate ranges (what will be plotted)
-    x_scaled = point_cloud_raw[:, 0] * (10.0 / 64.0)
-    y_scaled = point_cloud_raw[:, 1] * (10.0 / 64.0)  
-    theta_scaled = point_cloud_raw[:, 2] * (2 * np.pi / 64.0) - np.pi
-    print(f"Scaled coordinate ranges (for plotting):")
-    print(f"  X: [{x_scaled.min():.3f}, {x_scaled.max():.3f}] meters")
-    print(f"  Y: [{y_scaled.min():.3f}, {y_scaled.max():.3f}] meters")
-    print(f"  θ: [{theta_scaled.min():.3f}, {theta_scaled.max():.3f}] radians")
+    # Show normalized coordinate ranges
+    print(f"Normalized point cloud coordinate ranges:")
+    print(f"  X: [{point_cloud_norm_np[:, 0].min():.3f}, {point_cloud_norm_np[:, 0].max():.3f}]")
+    print(f"  Y: [{point_cloud_norm_np[:, 1].min():.3f}, {point_cloud_norm_np[:, 1].max():.3f}]")
+    print(f"  θ: [{point_cloud_norm_np[:, 2].min():.3f}, {point_cloud_norm_np[:, 2].max():.3f}]")
+    if point_cloud_norm_np.shape[1] >= 4:
+        print(f"  Value: [{point_cloud_norm_np[:, 3].min():.3f}, {point_cloud_norm_np[:, 3].max():.3f}]")
     
-    # Visualize forward process with raw coordinates
-    print("Visualizing forward diffusion process with raw coordinate values...")
+    # Visualize forward process
+    print("Visualizing forward diffusion process...")
+    print("- Row 1: Raw coordinates (denormalized after noise applied to normalized data)")
+    print("- Row 2: Normalized coordinates (what model sees during training)")
+    print("- Row 3: Environment with point overlay")
+    print("- Colors represent BRT values (red=high, blue=low)")
     visualize_forward_process(model, point_cloud_norm_np, env_grid_np, dataset)
     
     print("Visualization complete! Check the plots/ directory for saved figures.")
