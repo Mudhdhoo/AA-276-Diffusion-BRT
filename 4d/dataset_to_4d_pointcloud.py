@@ -71,9 +71,13 @@ def generate_4d_point_cloud(value_function, n_points_inside, n_points_outside, s
     
     # Sample points outside BRT (value > 0)
     outside_points = sample_points(n_points_outside, lambda v: v > 0)
-    
     # Combine both sets of points
     points_4d = np.vstack([inside_points, outside_points])
+    
+    # Scale x,y to be between 0 and 10. scale theta to be between -pi and pi. dont scale last dimension
+    points_4d[:, 0] = points_4d[:, 0] / 64 * 10  # x: [0,64] -> [0,10]
+    points_4d[:, 1] = points_4d[:, 1] / 64 * 10  # y: [0,64] -> [0,10]
+    points_4d[:, 2] = points_4d[:, 2] / 64 * 2 * np.pi - np.pi  # z: [0,64] -> [-π,π]
     
     return points_4d
 
