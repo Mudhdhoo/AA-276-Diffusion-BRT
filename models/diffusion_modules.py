@@ -56,9 +56,51 @@ class EnvironmentEncoder(nn.Module):
         return x
 
 
+class PointNetGlobalEncoder(nn.Module):
+    """PointNet encoder to create global point cloud representation"""
+    def __init__(self, state_dim, hidden_dim=256, output_dim=128):
+        super().__init__()
+        
+        # Point-wise MLPs
+        self.point_mlp = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+        
+        # Global feature MLP after max pooling
+        self.global_mlp = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim)
+        )
+        
+    def forward(self, points):
+        """
+        points: (batch_size, N, state_dim)
+        returns: (batch_size, output_dim) - global point cloud features
+        """
+        batch_size, N, _ = points.shape
+        
+        # Apply point-wise MLP
+        points_flat = points.view(-1, points.shape[-1])  # (batch_size * N, state_dim)
+        point_features = self.point_mlp(points_flat)  # (batch_size * N, hidden_dim)
+        point_features = point_features.view(batch_size, N, -1)  # (batch_size, N, hidden_dim)
+        
+        # Max pooling to get global features
+        global_features = torch.max(point_features, dim=1)[0]  # (batch_size, hidden_dim)
+        
+        # Apply global MLP
+        global_features = self.global_mlp(global_features)  # (batch_size, output_dim)
+        
+        return global_features
+
+
 class PointDiffusionNetwork(nn.Module):
     """Network for denoising individual points with conditioning"""
-    def __init__(self, state_dim, time_dim=128, env_dim=128, hidden_dim=256):
+    def __init__(self, state_dim, time_dim=128, env_dim=128, global_dim=128, hidden_dim=256):
         super().__init__()
         self.state_dim = state_dim
         
@@ -70,13 +112,23 @@ class PointDiffusionNetwork(nn.Module):
             nn.Linear(time_dim * 2, time_dim)
         )
         
+        # PointNet encoder for global point cloud features
+        self.pointnet_encoder = PointNetGlobalEncoder(state_dim, output_dim=global_dim)
+        
+        # Learned combination of all conditioning embeddings
+        self.combine_embeddings = nn.Sequential(
+            nn.Linear(time_dim + env_dim + global_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+        
         # Point processing network
         self.input_proj = nn.Linear(state_dim, hidden_dim)
         
         # Main processing blocks with conditioning
         self.blocks = nn.ModuleList([
             nn.Sequential(
-                nn.Linear(hidden_dim + time_dim + env_dim, hidden_dim),
+                nn.Linear(hidden_dim, hidden_dim),
                 nn.ReLU(),
                 nn.Linear(hidden_dim, hidden_dim),
                 nn.ReLU()
@@ -101,19 +153,23 @@ class PointDiffusionNetwork(nn.Module):
         # Get time embedding
         t_emb = self.time_mlp(t)  # (batch_size, time_dim)
         
-        # Expand embeddings to match number of points
-        t_emb_expanded = t_emb.unsqueeze(1).expand(-1, N, -1)  # (batch_size, N, time_dim)
-        env_emb_expanded = env_embedding.unsqueeze(1).expand(-1, N, -1)  # (batch_size, N, env_dim)
+        # Get global point cloud features using PointNet
+        global_features = self.pointnet_encoder(x)  # (batch_size, global_dim)
+        
+        # Combine all embeddings
+        combined_emb = torch.cat([t_emb, env_embedding, global_features], dim=-1)
+        combined_emb = self.combine_embeddings(combined_emb)  # (batch_size, hidden_dim)
+        combined_emb_expanded = combined_emb.unsqueeze(1).expand(-1, N, -1)  # (batch_size, N, hidden_dim)
         
         # Process points
         x_flat = x.view(-1, self.state_dim)  # (batch_size * N, state_dim)
         h = self.input_proj(x_flat)  # (batch_size * N, hidden_dim)
         h = h.view(batch_size, N, -1)  # (batch_size, N, hidden_dim)
         
-        # Apply blocks with conditioning
+        # Apply blocks with combined conditioning
         for block in self.blocks:
-            # Concatenate hidden state with embeddings
-            h_cond = torch.cat([h, t_emb_expanded, env_emb_expanded], dim=-1)
+            # Add conditioning to hidden state
+            h_cond = h + combined_emb_expanded
             h_flat = h_cond.view(-1, h_cond.shape[-1])
             h_new = block(h_flat)
             h_new = h_new.view(batch_size, N, -1)
