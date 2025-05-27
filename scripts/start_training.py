@@ -15,8 +15,7 @@ def run_training_process(run_name, dataset_dir, beta_end, cfg_scale, batch_size,
         "--guidance_scale", str(cfg_scale),
         "--batch_size", str(batch_size),
         "--wandb_api_key", wandb_api_key,
-        "--wandb_project", "brt-diffusion",
-        "--run_name", run_name
+        "--wandb_project", "brt-diffusion"
     ]
     return subprocess.Popen(cmd)
 
@@ -25,11 +24,6 @@ def main():
     parser.add_argument('--wandb_api_key', type=str, required=True,
                       help='Weights & Biases API key')
     args = parser.parse_args()
-
-    # Create necessary directories
-    os.makedirs("checkpoints", exist_ok=True)
-    os.makedirs("samples", exist_ok=True)
-    os.makedirs("models", exist_ok=True)
 
     # Start all training processes
     processes = []
