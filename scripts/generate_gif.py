@@ -35,8 +35,9 @@ def generate_denoising_gif(model, dataset, sample_idx, num_frames=50, save_dir="
     # Compute full reverse process
     reverse_process = []
     for t in tqdm(reversed(range(model.num_timesteps)), desc="Denoising"):
-        t_batch = torch.full((1,), t, device=model.device, dtype=torch.long)
-        x_t = model.p_sample(x_t, t_batch, env_grid)
+        with torch.no_grad():
+            t_batch = torch.full((1,), t, device=model.device, dtype=torch.long)
+            x_t = model.p_sample(x_t, t_batch, env_grid)
         reverse_process.append(x_t.clone())
     
     # Select evenly spaced samples for the GIF
