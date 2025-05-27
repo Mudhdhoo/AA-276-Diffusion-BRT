@@ -36,9 +36,9 @@ def visualize_point_cloud(points, title=None, save_path=None, dataset=None):
         points = dataset.denormalize_points(points)
     
     # Scale coordinates to match environment dimensions
-    x = points[:, 0] * (10.0 / 64.0)  # Scale x from [0,64] to [0,10]
-    y = points[:, 1] * (10.0 / 64.0)  # Scale y from [0,64] to [0,10]
-    theta = points[:, 2] * (2 * np.pi / 64.0) - np.pi  # Scale theta from [0,64] to [-π,π]
+    x = points[:, 0]  # Scale x from [0,64] to [0,10]
+    y = points[:, 1]  # Scale y from [0,64] to [0,10]
+    theta = points[:, 2]  # Scale theta from [0,64] to [-π,π]
     
     # Check if we have a 4th dimension
     if points.shape[1] > 3:
