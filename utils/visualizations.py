@@ -1,5 +1,30 @@
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.colors import LinearSegmentedColormap
+
+def create_dual_colormap():
+    """
+    Create a colormap with two distinct scales:
+    - Negative values: Orange to Red (unsafe)
+    - Positive values: Green to Blue (safe)
+    """
+    unsafe_colors = [(1.0, 0.6, 0.0),  # Orange
+                    (0.8, 0.0, 0.0)]   # Red
+    safe_colors = [(0.0, 0.8, 0.0),   # Green
+                  (0.0, 0.4, 0.8)]    # Blue
+    
+    # Create the colormaps
+    unsafe_cmap = LinearSegmentedColormap.from_list('unsafe', unsafe_colors, N=50)
+    safe_cmap = LinearSegmentedColormap.from_list('safe', safe_colors, N=50)
+    
+    # Combine the colormaps
+    colors = []
+    # Add unsafe colors (reversed to go from orange to red)
+    colors.extend(unsafe_cmap(np.linspace(1, 0, 50)))
+    # Add safe colors
+    colors.extend(safe_cmap(np.linspace(0, 1, 50)))
+    
+    return LinearSegmentedColormap.from_list('dual_scale', colors, N=100)
 
 def visualize_point_cloud(points, title=None, save_path=None, dataset=None):
     """Visualize a single point cloud and optionally save it."""
@@ -15,7 +40,23 @@ def visualize_point_cloud(points, title=None, save_path=None, dataset=None):
     y = points[:, 1] * (10.0 / 64.0)  # Scale y from [0,64] to [0,10]
     theta = points[:, 2] * (2 * np.pi / 64.0) - np.pi  # Scale theta from [0,64] to [-π,π]
     
-    ax.scatter(x, y, theta, s=2, alpha=0.5)
+    # Check if we have a 4th dimension
+    if points.shape[1] > 3:
+        w = points[:, 3]  # No scaling needed for safety value
+        
+        # Ensure 0 is centered in the colormap
+        vmin, vmax = w.min(), w.max()
+        abs_max = max(abs(vmin), abs(vmax))
+        vmin, vmax = -abs_max, abs_max
+        
+        # Create dual-scale colormap
+        cmap = create_dual_colormap()
+        
+        scatter = ax.scatter(x, y, theta, c=w, cmap=cmap, s=2, alpha=0.5, vmin=vmin, vmax=vmax)
+        plt.colorbar(scatter, label='Value Function')
+    else:
+        ax.scatter(x, y, theta, s=2, alpha=0.5)
+    
     if title:
         ax.set_title(title)
     ax.set_xlabel('X')
@@ -118,7 +159,24 @@ def visualize_comparison(true_pc, generated_pc, env_grid, title=None, save_path=
     x = true_pc[:, 0] * (10.0 / 64.0)
     y = true_pc[:, 1] * (10.0 / 64.0)
     theta = true_pc[:, 2] * (2 * np.pi / 64.0) - np.pi
-    scatter2 = ax2.scatter(x, y, theta, s=2, alpha=0.5, label='BRT Points')
+    
+    # Check if we have a 4th dimension
+    if true_pc.shape[1] > 3:
+        w = true_pc[:, 3]  # No scaling needed for safety value
+        
+        # Ensure 0 is centered in the colormap
+        vmin, vmax = w.min(), w.max()
+        abs_max = max(abs(vmin), abs(vmax))
+        vmin, vmax = -abs_max, abs_max
+        
+        # Create dual-scale colormap
+        cmap = create_dual_colormap()
+        
+        scatter2 = ax2.scatter(x, y, theta, c=w, cmap=cmap, s=2, alpha=0.5, label='BRT Points', vmin=vmin, vmax=vmax)
+        plt.colorbar(scatter2, ax=ax2, label='Value Function')
+    else:
+        scatter2 = ax2.scatter(x, y, theta, s=2, alpha=0.5, label='BRT Points')
+    
     ax2.set_title('True BRT Point Cloud', fontsize=14, pad=20)
     ax2.set_xlabel('X Position (m)', fontsize=12)
     ax2.set_ylabel('Y Position (m)', fontsize=12)
@@ -134,7 +192,24 @@ def visualize_comparison(true_pc, generated_pc, env_grid, title=None, save_path=
     x = generated_pc[:, 0] * (10.0 / 64.0)
     y = generated_pc[:, 1] * (10.0 / 64.0)
     theta = generated_pc[:, 2] * (2 * np.pi / 64.0) - np.pi
-    scatter3 = ax3.scatter(x, y, theta, s=2, alpha=0.5, label='BRT Points')
+    
+    # Check if we have a 4th dimension
+    if generated_pc.shape[1] > 3:
+        w = generated_pc[:, 3]  # No scaling needed for safety value
+        
+        # Ensure 0 is centered in the colormap
+        vmin, vmax = w.min(), w.max()
+        abs_max = max(abs(vmin), abs(vmax))
+        vmin, vmax = -abs_max, abs_max
+        
+        # Create dual-scale colormap
+        cmap = create_dual_colormap()
+        
+        scatter3 = ax3.scatter(x, y, theta, c=w, cmap=cmap, s=2, alpha=0.5, label='BRT Points', vmin=vmin, vmax=vmax)
+        plt.colorbar(scatter3, ax=ax3, label='Value Function')
+    else:
+        scatter3 = ax3.scatter(x, y, theta, s=2, alpha=0.5, label='BRT Points')
+    
     ax3.set_title('Generated BRT Point Cloud', fontsize=14, pad=20)
     ax3.set_xlabel('X Position (m)', fontsize=12)
     ax3.set_ylabel('Y Position (m)', fontsize=12)
@@ -169,7 +244,23 @@ def visualize_denoising_with_true(points_sequence, true_pc, titles, save_path=No
         y = points[:, 1] * (10.0 / 64.0)
         theta = points[:, 2] * (2 * np.pi / 64.0) - np.pi
         
-        scatter = ax.scatter(x, y, theta, s=2, alpha=0.5, label='BRT Points')
+        # Check if we have a 4th dimension
+        if points.shape[1] > 3:
+            w = points[:, 3]  # No scaling needed for safety value
+            
+            # Ensure 0 is centered in the colormap
+            vmin, vmax = w.min(), w.max()
+            abs_max = max(abs(vmin), abs(vmax))
+            vmin, vmax = -abs_max, abs_max
+            
+            # Create dual-scale colormap
+            cmap = create_dual_colormap()
+            
+            scatter = ax.scatter(x, y, theta, c=w, cmap=cmap, s=2, alpha=0.5, label='BRT Points', vmin=vmin, vmax=vmax)
+            plt.colorbar(scatter, ax=ax, label='Value Function')
+        else:
+            scatter = ax.scatter(x, y, theta, s=2, alpha=0.5, label='BRT Points')
+        
         ax.set_title(f'Denoising Step {title}', fontsize=14, pad=20)
         ax.set_xlabel('X Position (m)', fontsize=12)
         ax.set_ylabel('Y Position (m)', fontsize=12)
@@ -185,7 +276,24 @@ def visualize_denoising_with_true(points_sequence, true_pc, titles, save_path=No
     x = true_pc[:, 0] * (10.0 / 64.0)
     y = true_pc[:, 1] * (10.0 / 64.0)
     theta = true_pc[:, 2] * (2 * np.pi / 64.0) - np.pi
-    scatter_true = ax_true.scatter(x, y, theta, s=2, alpha=0.5, label='BRT Points')
+    
+    # Check if we have a 4th dimension
+    if true_pc.shape[1] > 3:
+        w = true_pc[:, 3]  # No scaling needed for safety value
+        
+        # Ensure 0 is centered in the colormap
+        vmin, vmax = w.min(), w.max()
+        abs_max = max(abs(vmin), abs(vmax))
+        vmin, vmax = -abs_max, abs_max
+        
+        # Create dual-scale colormap
+        cmap = create_dual_colormap()
+        
+        scatter_true = ax_true.scatter(x, y, theta, c=w, cmap=cmap, s=2, alpha=0.5, label='BRT Points', vmin=vmin, vmax=vmax)
+        plt.colorbar(scatter_true, ax=ax_true, label='Value Function')
+    else:
+        scatter_true = ax_true.scatter(x, y, theta, s=2, alpha=0.5, label='BRT Points')
+    
     ax_true.set_title('True BRT Point Cloud', fontsize=14, pad=20)
     ax_true.set_xlabel('X Position (m)', fontsize=12)
     ax_true.set_ylabel('Y Position (m)', fontsize=12)
