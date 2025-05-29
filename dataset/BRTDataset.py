@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from loguru import logger
+from stats.train_stats import MEAN, STD
 
 class BRTDataset(Dataset):
     """Dataset for BRT point clouds and environments"""
@@ -49,9 +50,39 @@ class BRTDataset(Dataset):
         self.env_size = first_env.shape[0]            # Environment grid size
         
         # Compute normalization statistics
-        self.compute_normalization_stats()
+        #self.compute_normalization_stats()
+        self.compute_min_max_stats()
         
+        # Train set mean and std
+        self.points_mean = np.array(MEAN)
+        self.points_std = np.array(STD)
+        logger.info(f"Mean: {self.points_mean}")
+        logger.info(f"Std: {self.points_std}")
+
         logger.info(f"Found {len(self.sample_dirs)} environments with {len(self.point_cloud_files)} total point clouds in {split} split")
+
+
+    def compute_min_max_stats(self):
+        """Compute min-max stats for point cloud"""
+        all_points = []
+        for sample_dir, pc_file in self.point_cloud_files:
+            points = np.load(os.path.join(self.dataset_dir, sample_dir, pc_file))
+            all_points.append(points)
+        
+        all_points = np.concatenate(all_points, axis=0)
+        
+        # Step 1: Min-max ranges for initial scaling
+        self.points_min = np.array([0.0, 0.0, -np.pi])
+        self.points_max = np.array([10.0, 10.0, np.pi])
+        
+        # For value (4th dimension if it exists), use min-max from dataset
+        if all_points.shape[1] == 4:
+            self.points_min = np.append(self.points_min, np.min(all_points[:, 3]))
+            self.points_max = np.append(self.points_max, np.max(all_points[:, 3]))
+
+        logger.info(f"Min-Max ranges:")
+        logger.info(f"Min: {self.points_min}")
+        logger.info(f"Max: {self.points_max}")
         
     def compute_normalization_stats(self):
         """Compute normalization stats for point cloud
@@ -94,6 +125,7 @@ class BRTDataset(Dataset):
         print(f"\nFixed normalization stats (computed from entire training set):")
         print(f"Mean: {self.points_mean}")
         print(f"Std: {self.points_std}")
+
     
     def normalize_points(self, points):
         """Normalize point cloud coordinates using min-max scaling to [-1,1] followed by fixed mean-std normalization"""
@@ -101,6 +133,7 @@ class BRTDataset(Dataset):
         normalized = 2.0 * (points - self.points_min) / (self.points_max - self.points_min) - 1.0
         # Then apply fixed mean-std normalization
 
+        #return normalized
         return (normalized - self.points_mean) / self.points_std
     
     def denormalize_points(self, points):
