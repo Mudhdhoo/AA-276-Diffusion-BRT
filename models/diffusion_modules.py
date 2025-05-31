@@ -21,7 +21,7 @@ class SinusoidalPositionEmbeddings(nn.Module):
 
 class AttentionBlock(nn.Module):
     """Transformer-style block with self-attention and conditioning"""
-    def __init__(self, dim, cond_dim, num_heads=8, dropout=0.1):
+    def __init__(self, dim, cond_dim, num_heads=3, dropout=0.1):
         super().__init__()
         self.attention = nn.MultiheadAttention(dim, num_heads, dropout=dropout, batch_first=True)
         self.norm1 = nn.LayerNorm(dim)
@@ -29,10 +29,11 @@ class AttentionBlock(nn.Module):
         
         # MLP with conditioning
         self.mlp = nn.Sequential(
-            nn.Linear(dim + cond_dim, dim * 4),
+            nn.Linear(dim + cond_dim, dim * 2),
+            nn.LayerNorm(dim * 2),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(dim * 4, dim)
+            nn.Linear(dim * 2, dim)
         )
         
     def forward(self, x, conditioning):
@@ -52,7 +53,6 @@ class AttentionBlock(nn.Module):
         x = x + mlp_out
         
         return x
-
 
 class EnvironmentEncoder(nn.Module):
     """Encoder for nxn environment matrix"""
@@ -93,7 +93,7 @@ class EnvironmentEncoder(nn.Module):
 
 class PointDiffusionNetwork(nn.Module):
     """Network for denoising individual points with conditioning and self-attention"""
-    def __init__(self, state_dim, time_dim=128, env_dim=128, hidden_dim=256, num_heads=8, num_layers=4):
+    def __init__(self, state_dim, time_dim=128, env_dim=128, hidden_dim=256, num_heads=8, num_layers=3):
         super().__init__()
         self.state_dim = state_dim
         self.hidden_dim = hidden_dim
@@ -121,6 +121,7 @@ class PointDiffusionNetwork(nn.Module):
         # Output projection
         self.output_proj = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.LayerNorm(hidden_dim // 2),
             nn.ReLU(),
             nn.Linear(hidden_dim // 2, state_dim)
         )

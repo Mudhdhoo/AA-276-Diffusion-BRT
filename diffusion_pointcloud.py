@@ -15,7 +15,7 @@ from datetime import datetime
 def parse_args():
     parser = argparse.ArgumentParser(description='Train BRT Diffusion Model')
     parser.add_argument('--dataset_dir', type=str, 
-                      default='~/1070_4d_pointcloud_3000inside_1000outside_4cloudsperenv',
+                      default='../1070_4d_pointcloud_3000inside_1000outside_4cloudsperenv',
                       help='Path to dataset directory containing sample_* folders')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                       help='Device to use for training (cuda/cpu)')
