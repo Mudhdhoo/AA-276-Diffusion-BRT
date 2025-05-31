@@ -93,7 +93,7 @@ class EnvironmentEncoder(nn.Module):
 
 class PointDiffusionNetwork(nn.Module):
     """Network for denoising individual points with conditioning and self-attention"""
-    def __init__(self, state_dim, time_dim=128, env_dim=128, hidden_dim=256, num_heads=8, num_layers=3):
+    def __init__(self, state_dim, time_dim=128, env_dim=128, hidden_dim=256, num_heads=3, num_layers=3):
         super().__init__()
         self.state_dim = state_dim
         self.hidden_dim = hidden_dim
