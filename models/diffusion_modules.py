@@ -19,6 +19,41 @@ class SinusoidalPositionEmbeddings(nn.Module):
         return embeddings
 
 
+class AttentionBlock(nn.Module):
+    """Transformer-style block with self-attention and conditioning"""
+    def __init__(self, dim, cond_dim, num_heads=8, dropout=0.1):
+        super().__init__()
+        self.attention = nn.MultiheadAttention(dim, num_heads, dropout=dropout, batch_first=True)
+        self.norm1 = nn.LayerNorm(dim)
+        self.norm2 = nn.LayerNorm(dim)
+        
+        # MLP with conditioning
+        self.mlp = nn.Sequential(
+            nn.Linear(dim + cond_dim, dim * 4),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(dim * 4, dim)
+        )
+        
+    def forward(self, x, conditioning):
+        """
+        x: (batch_size, num_points, dim)
+        conditioning: (batch_size, num_points, cond_dim) - time + env embeddings
+        """
+        # Self-attention with residual connection
+        x_normed = self.norm1(x)
+        attn_out, _ = self.attention(x_normed, x_normed, x_normed)
+        x = x + attn_out
+        
+        # MLP with conditioning and residual connection
+        x_normed = self.norm2(x)
+        x_cond = torch.cat([x_normed, conditioning], dim=-1)
+        mlp_out = self.mlp(x_cond)
+        x = x + mlp_out
+        
+        return x
+
+
 class EnvironmentEncoder(nn.Module):
     """Encoder for nxn environment matrix"""
     def __init__(self, env_size, hidden_dim=256, output_dim=128):
@@ -57,30 +92,30 @@ class EnvironmentEncoder(nn.Module):
 
 
 class PointDiffusionNetwork(nn.Module):
-    """Network for denoising individual points with conditioning"""
-    def __init__(self, state_dim, time_dim=128, env_dim=128, hidden_dim=256):
+    """Network for denoising individual points with conditioning and self-attention"""
+    def __init__(self, state_dim, time_dim=128, env_dim=128, hidden_dim=256, num_heads=8, num_layers=4):
         super().__init__()
         self.state_dim = state_dim
+        self.hidden_dim = hidden_dim
         
         # Time embedding
         self.time_mlp = nn.Sequential(
             SinusoidalPositionEmbeddings(time_dim),
-            nn.Linear(time_dim, time_dim * 2),
-            nn.ReLU(),
+            nn.Linear(time_dim, time_dim * 4),  # Bigger intermediate
+            nn.SiLU(),  # Better activation than ReLU
+            nn.Linear(time_dim * 4, time_dim * 2),
+            nn.SiLU(),
             nn.Linear(time_dim * 2, time_dim)
         )
         
         # Point processing network
         self.input_proj = nn.Linear(state_dim, hidden_dim)
         
-        # Main processing blocks with conditioning
+        # Attention blocks with conditioning
+        cond_dim = time_dim + env_dim
         self.blocks = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(hidden_dim + time_dim + env_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.ReLU()
-            ) for _ in range(4)
+            AttentionBlock(hidden_dim, cond_dim, num_heads)
+            for _ in range(num_layers)
         ])
         
         # Output projection
@@ -105,24 +140,18 @@ class PointDiffusionNetwork(nn.Module):
         t_emb_expanded = t_emb.unsqueeze(1).expand(-1, N, -1)  # (batch_size, N, time_dim)
         env_emb_expanded = env_embedding.unsqueeze(1).expand(-1, N, -1)  # (batch_size, N, env_dim)
         
-        # Process points
-        x_flat = x.view(-1, self.state_dim)  # (batch_size * N, state_dim)
-        h = self.input_proj(x_flat)  # (batch_size * N, hidden_dim)
-        h = h.view(batch_size, N, -1)  # (batch_size, N, hidden_dim)
+        # Combine conditioning
+        conditioning = torch.cat([t_emb_expanded, env_emb_expanded], dim=-1)  # (batch_size, N, time_dim + env_dim)
         
-        # Apply blocks with conditioning
+        # Project input to hidden dimension
+        h = self.input_proj(x)  # (batch_size, N, hidden_dim)
+        
+        # Apply attention blocks with conditioning
         for block in self.blocks:
-            # Concatenate hidden state with embeddings
-            h_cond = torch.cat([h, t_emb_expanded, env_emb_expanded], dim=-1)
-            h_flat = h_cond.view(-1, h_cond.shape[-1])
-            h_new = block(h_flat)
-            h_new = h_new.view(batch_size, N, -1)
-            h = h + h_new  # Residual connection
+            h = block(h, conditioning)
         
         # Output noise prediction
-        h_flat = h.view(-1, h.shape[-1])
-        noise_pred = self.output_proj(h_flat)
-        noise_pred = noise_pred.view(batch_size, N, self.state_dim)
+        noise_pred = self.output_proj(h)
         
         return noise_pred
 
