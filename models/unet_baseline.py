@@ -248,8 +248,16 @@ class BRTUNet(nn.Module):
         
         return points
     
-    def compute_chamfer_loss(self, pred_points, target_points):
-        """Compute permutation-invariant Chamfer distance loss"""
+    def compute_chamfer_loss(self, pred_points, target_points, chunk_size=500):
+        """
+        Memory-optimized Chamfer distance computation using chunking
+        
+        CHANGES MADE:
+        1. Added chunk_size parameter to process points in smaller batches
+        2. Chunked computation to avoid storing full (B, N, M) distance matrix
+        3. Added memory cleanup between chunks
+        4. Process each batch item separately if needed for very large point clouds
+        """
         # Verify tensor shapes (must be rank-3 tensors: batch_size x num_points x feature_dim)
         assert len(pred_points.shape) == 3, f"pred_points must be rank-3 tensor (B,N,D), got shape {pred_points.shape}"
         assert len(target_points.shape) == 3, f"target_points must be rank-3 tensor (B,M,D), got shape {target_points.shape}"
@@ -262,6 +270,76 @@ class BRTUNet(nn.Module):
         
         # Ensure feature dimensions match
         assert D == D_target, f"Feature dimension mismatch: pred_points has {D}, target_points has {D_target}"
+        
+        # If point clouds are small enough, use original implementation
+        if N * M < 1000000:  # Threshold for switching to chunked computation
+            return self._compute_chamfer_loss_original(pred_points, target_points)
+        
+        # For large point clouds, use chunked computation
+        total_chamfer_loss = 0.0
+        
+        for b in range(B):
+            pred_batch = pred_points[b:b+1]  # (1, N, D)
+            target_batch = target_points[b:b+1]  # (1, M, D)
+            
+            # Compute distances from pred to target (chunked)
+            min_dists_pred_to_target = []
+            for i in range(0, N, chunk_size):
+                end_i = min(i + chunk_size, N)
+                pred_chunk = pred_batch[:, i:end_i]  # (1, chunk_size, D)
+                
+                # Expand for distance computation
+                pred_expanded = pred_chunk.unsqueeze(2)  # (1, chunk_size, 1, D)
+                target_expanded = target_batch.unsqueeze(1)  # (1, 1, M, D)
+                
+                # Compute distances for this chunk
+                chunk_dists = torch.sum((pred_expanded - target_expanded) ** 2, dim=-1)  # (1, chunk_size, M)
+                min_dists_chunk = torch.min(chunk_dists, dim=2)[0]  # (1, chunk_size)
+                min_dists_pred_to_target.append(min_dists_chunk)
+                
+                # Clear intermediate tensors
+                del pred_expanded, target_expanded, chunk_dists, min_dists_chunk
+            
+            # Concatenate and compute mean
+            min_dists_pred_to_target = torch.cat(min_dists_pred_to_target, dim=1)  # (1, N)
+            dist_pred_to_target = min_dists_pred_to_target.mean()
+            
+            # Compute distances from target to pred (chunked)
+            min_dists_target_to_pred = []
+            for j in range(0, M, chunk_size):
+                end_j = min(j + chunk_size, M)
+                target_chunk = target_batch[:, j:end_j]  # (1, chunk_size, D)
+                
+                # Expand for distance computation
+                target_expanded = target_chunk.unsqueeze(2)  # (1, chunk_size, 1, D)
+                pred_expanded = pred_batch.unsqueeze(1)  # (1, 1, N, D)
+                
+                # Compute distances for this chunk
+                chunk_dists = torch.sum((target_expanded - pred_expanded) ** 2, dim=-1)  # (1, chunk_size, N)
+                min_dists_chunk = torch.min(chunk_dists, dim=2)[0]  # (1, chunk_size)
+                min_dists_target_to_pred.append(min_dists_chunk)
+                
+                # Clear intermediate tensors
+                del target_expanded, pred_expanded, chunk_dists, min_dists_chunk
+            
+            # Concatenate and compute mean
+            min_dists_target_to_pred = torch.cat(min_dists_target_to_pred, dim=1)  # (1, M)
+            dist_target_to_pred = min_dists_target_to_pred.mean()
+            
+            # Add to total loss
+            batch_chamfer_loss = dist_pred_to_target + dist_target_to_pred
+            total_chamfer_loss += batch_chamfer_loss
+            
+            # Clear batch tensors
+            del min_dists_pred_to_target, min_dists_target_to_pred
+        
+        # Return average over batch
+        return total_chamfer_loss / B
+
+    def _compute_chamfer_loss_original(self, pred_points, target_points):
+        """Original implementation for smaller point clouds"""
+        B, N, D = pred_points.shape
+        _, M, _ = target_points.shape
         
         # Expand dimensions for pairwise distance computation
         pred_expanded = pred_points.unsqueeze(2)    # (B, N, 1, D)
@@ -276,8 +354,8 @@ class BRTUNet(nn.Module):
         
         chamfer_loss = (dist_pred_to_target + dist_target_to_pred).mean()
         
-        return chamfer_loss    
-    
+        return chamfer_loss 
+       
     def compute_loss(self, pred_points, target_points, include_l2_reg=True):
         """
         Compute simple Chamfer distance loss with optional L2 regularization
