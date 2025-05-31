@@ -1,3 +1,7 @@
+"""
+Generate a GIF showing the denoising process for a sample from the dataset.
+"""
+
 import os
 import torch
 import numpy as np

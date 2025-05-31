@@ -9,7 +9,9 @@ import os
 from tqdm import tqdm
 
 path = "../1070_4d_pointcloud_3000inside_1000outside_4cloudsperenv"
-dataset = BRTDataset(path)
+#dataset = BRTDataset(path, split="train")
+#dataset = BRTDataset(path, split="val")
+dataset = BRTDataset(path, split="test")
 
 for file in tqdm(dataset.point_cloud_files):
     point_cloud_path = os.path.join(path, file[0], file[1])
