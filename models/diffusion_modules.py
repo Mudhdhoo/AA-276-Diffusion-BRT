@@ -56,9 +56,61 @@ class EnvironmentEncoder(nn.Module):
         return x
 
 
+class PointNet(nn.Module):
+    """PointNet architecture for encoding global point cloud structure"""
+    def __init__(self, state_dim, output_dim=128, hidden_dims=[64, 128, 256]):
+        super().__init__()
+        self.state_dim = state_dim
+        self.output_dim = output_dim
+        
+        # Per-point feature extraction MLPs
+        layers = []
+        prev_dim = state_dim
+        
+        for hidden_dim in hidden_dims:
+            layers.extend([
+                nn.Linear(prev_dim, hidden_dim),
+                nn.SiLU(),
+                nn.GroupNorm(8, hidden_dim)
+            ])
+            prev_dim = hidden_dim
+        
+        self.point_mlp = nn.Sequential(*layers)
+        
+        # Global feature processing after max pooling
+        self.global_mlp = nn.Sequential(
+            nn.Linear(hidden_dims[-1], hidden_dims[-1]),
+            nn.SiLU(),
+            nn.GroupNorm(8, hidden_dims[-1]),
+            nn.Linear(hidden_dims[-1], output_dim)
+        )
+        
+    def forward(self, points):
+        """
+        points: (batch_size, N, state_dim) - point cloud
+        Returns: (batch_size, output_dim) - global embedding
+        """
+        batch_size, N, _ = points.shape
+        
+        # Reshape for per-point processing
+        points_flat = points.view(-1, self.state_dim)  # (batch_size * N, state_dim)
+        
+        # Extract per-point features
+        point_features = self.point_mlp(points_flat)  # (batch_size * N, hidden_dims[-1])
+        point_features = point_features.view(batch_size, N, -1)  # (batch_size, N, hidden_dims[-1])
+        
+        # Global max pooling to get permutation-invariant global feature
+        global_features, _ = torch.max(point_features, dim=1)  # (batch_size, hidden_dims[-1])
+        
+        # Process global features
+        global_embedding = self.global_mlp(global_features)  # (batch_size, output_dim)
+        
+        return global_embedding
+
+
 class PointDiffusionNetwork(nn.Module):
     """Network for denoising individual points with conditioning"""
-    def __init__(self, state_dim, time_dim=128, env_dim=128, hidden_dim=256):
+    def __init__(self, state_dim, time_dim=128, env_dim=128, pointnet_dim=128, hidden_dim=256):
         super().__init__()
         self.state_dim = state_dim
         
@@ -70,13 +122,16 @@ class PointDiffusionNetwork(nn.Module):
             nn.Linear(time_dim * 2, time_dim)
         )
         
+        # PointNet for global point cloud embedding
+        self.pointnet = PointNet(state_dim, output_dim=pointnet_dim)
+        
         # Point processing network
         self.input_proj = nn.Linear(state_dim, hidden_dim)
         
-        # Main processing blocks with conditioning
+        # Main processing blocks with conditioning (now includes pointnet embedding)
         self.blocks = nn.ModuleList([
             nn.Sequential(
-                nn.Linear(hidden_dim + time_dim + env_dim, hidden_dim),
+                nn.Linear(hidden_dim + time_dim + env_dim + pointnet_dim, hidden_dim),
                 nn.ReLU(),
                 nn.Linear(hidden_dim, hidden_dim),
                 nn.ReLU()
@@ -101,19 +156,23 @@ class PointDiffusionNetwork(nn.Module):
         # Get time embedding
         t_emb = self.time_mlp(t)  # (batch_size, time_dim)
         
+        # Get global point cloud embedding using PointNet
+        pointnet_emb = self.pointnet(x)  # (batch_size, pointnet_dim)
+        
         # Expand embeddings to match number of points
         t_emb_expanded = t_emb.unsqueeze(1).expand(-1, N, -1)  # (batch_size, N, time_dim)
         env_emb_expanded = env_embedding.unsqueeze(1).expand(-1, N, -1)  # (batch_size, N, env_dim)
+        pointnet_emb_expanded = pointnet_emb.unsqueeze(1).expand(-1, N, -1)  # (batch_size, N, pointnet_dim)
         
         # Process points
         x_flat = x.view(-1, self.state_dim)  # (batch_size * N, state_dim)
         h = self.input_proj(x_flat)  # (batch_size * N, hidden_dim)
         h = h.view(batch_size, N, -1)  # (batch_size, N, hidden_dim)
         
-        # Apply blocks with conditioning
+        # Apply blocks with conditioning (time + environment + global point cloud structure)
         for block in self.blocks:
-            # Concatenate hidden state with embeddings
-            h_cond = torch.cat([h, t_emb_expanded, env_emb_expanded], dim=-1)
+            # Concatenate hidden state with all embeddings
+            h_cond = torch.cat([h, t_emb_expanded, env_emb_expanded, pointnet_emb_expanded], dim=-1)
             h_flat = h_cond.view(-1, h_cond.shape[-1])
             h_new = block(h_flat)
             h_new = h_new.view(batch_size, N, -1)
@@ -131,7 +190,7 @@ class BRTDiffusionModel(nn.Module):
     """Complete diffusion model for BRT generation"""
     def __init__(self, state_dim, env_size, num_points, num_timesteps=1000,
                  beta_start=0.0001, beta_end=0.02, device='cuda', 
-                 null_conditioning_prob=0.15):
+                 null_conditioning_prob=0.15, time_dim=128, env_dim=128, pointnet_dim=128):
         super().__init__()
         self.state_dim = state_dim
         self.env_size = env_size
@@ -141,8 +200,9 @@ class BRTDiffusionModel(nn.Module):
         self.null_conditioning_prob = null_conditioning_prob
         
         # Networks
-        self.env_encoder = EnvironmentEncoder(env_size)
-        self.denoiser = PointDiffusionNetwork(state_dim)
+        self.env_encoder = EnvironmentEncoder(env_size, output_dim=env_dim)
+        self.denoiser = PointDiffusionNetwork(state_dim, time_dim=time_dim, 
+                                            env_dim=env_dim, pointnet_dim=pointnet_dim)
         
         # Create null environment (all zeros) for unconditional training
         self.register_buffer('null_env', torch.zeros(1, env_size, env_size))
