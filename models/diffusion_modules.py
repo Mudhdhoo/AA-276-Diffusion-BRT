@@ -238,8 +238,8 @@ class BRTDiffusionModel(nn.Module):
         
         return x_t
     
-    def compute_loss(self, x_start, env):
-        """Compute training loss with classifier-free guidance"""
+    def compute_loss(self, x_start, env, reconstruction_weight=0.1):
+        """Compute training loss with classifier-free guidance and reconstruction regularization"""
         batch_size = x_start.shape[0]
         
         # Sample random timesteps
@@ -270,7 +270,20 @@ class BRTDiffusionModel(nn.Module):
         # Predict noise
         noise_pred = self.denoiser(x_noisy, t, env_embedding)
         
-        # MSE loss
-        loss = F.mse_loss(noise_pred, noise)
+        # MSE loss for noise prediction
+        noise_loss = F.mse_loss(noise_pred, noise)
         
-        return loss
+        # Reconstruction regularization: denoise the prediction and compare with ground truth
+        sqrt_alphas_cumprod_t = self.sqrt_alphas_cumprod[t].view(-1, 1, 1)
+        sqrt_one_minus_alphas_cumprod_t = self.sqrt_one_minus_alphas_cumprod[t].view(-1, 1, 1)
+        
+        # Predict x_0 from x_noisy and predicted noise
+        x_0_pred = (x_noisy - sqrt_one_minus_alphas_cumprod_t * noise_pred) / sqrt_alphas_cumprod_t
+        
+        # Reconstruction loss
+        reconstruction_loss = F.mse_loss(x_0_pred, x_start)
+        
+        # Combined loss
+        total_loss = noise_loss + reconstruction_weight * reconstruction_loss
+        
+        return total_loss
