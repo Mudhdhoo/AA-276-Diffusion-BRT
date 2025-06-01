@@ -88,7 +88,7 @@ class PointDiffusionNetwork(nn.Module):
         # Output projection
         self.output_proj = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.GroupNorm(8, hidden_dim // 2),
+            nn.GroupNorm(4, hidden_dim // 2),
             nn.SiLU(),
             nn.Linear(hidden_dim // 2, state_dim)
         )
