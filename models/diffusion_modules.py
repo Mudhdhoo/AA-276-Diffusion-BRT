@@ -54,7 +54,7 @@ class EnvironmentEncoder(nn.Module):
         x = self.fc2(x)
         
         return x
-
+#
 
 class PointNet(nn.Module):
     """PointNet architecture for encoding global point cloud structure"""
