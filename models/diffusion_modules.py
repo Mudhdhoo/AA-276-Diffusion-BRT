@@ -21,7 +21,7 @@ class SinusoidalPositionEmbeddings(nn.Module):
 
 class AttentionBlock(nn.Module):
     """Transformer-style block with self-attention and conditioning"""
-    def __init__(self, dim, cond_dim, num_heads=3, dropout=0.1):
+    def __init__(self, dim, cond_dim, num_heads=2, dropout=0.1):
         super().__init__()
         self.attention = nn.MultiheadAttention(dim, num_heads, dropout=dropout, batch_first=True)
         self.norm1 = nn.LayerNorm(dim)
@@ -93,7 +93,7 @@ class EnvironmentEncoder(nn.Module):
 
 class PointDiffusionNetwork(nn.Module):
     """Network for denoising individual points with conditioning and self-attention"""
-    def __init__(self, state_dim, time_dim=128, env_dim=128, hidden_dim=256, num_heads=3, num_layers=3):
+    def __init__(self, state_dim, time_dim=128, env_dim=128, hidden_dim=256, num_heads=2, num_layers=2):
         super().__init__()
         self.state_dim = state_dim
         self.hidden_dim = hidden_dim
