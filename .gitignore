@@ -93,3 +93,7 @@ tensorboard/
 checkpoints/
 
 commands.txt
+
+evaluation_output/
+
+*.pt

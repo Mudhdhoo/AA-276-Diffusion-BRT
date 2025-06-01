@@ -142,7 +142,7 @@ def generate_denoising_gif(model, dataset, sample_idx, num_frames=50, save_dir="
             # If not square, create a simple visualization
             env_grid_2d = np.ones((64, 64)) * 0.5  # Gray background
     
-    im = ax_env.imshow(env_grid_2d, origin='lower', extent=[0, 10, 0, 10], 
+    im = ax_env.imshow(env_grid_2d.T, origin='lower', extent=[0, 10, 0, 10], 
                        cmap='plasma', alpha=0.8, interpolation='bilinear')
     
     # Add colorbar for environment grid

@@ -24,9 +24,11 @@ def visualize_point_clouds(ax, points, title, color='b', alpha=0.6):
 
 def visualize_environment(ax, env_grid):
     """Visualize the environment grid as a heatmap with (0,0) at the bottom-left (Cartesian)"""
-    ax.imshow(env_grid, cmap='gray', origin='lower')
+    # Transpose grid so that grid[i,j] maps to physical position (x=j, y=i)
+    ax.imshow(env_grid.T, cmap='gray', origin='lower', extent=[0, 10, 0, 10])
     ax.set_title('Environment Grid')
-    ax.axis('off')
+    ax.set_xlabel('X Position')
+    ax.set_ylabel('Y Position')
 
 def main():
     # Initialize dataset
