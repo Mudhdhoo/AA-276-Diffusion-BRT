@@ -3,6 +3,7 @@
 Comprehensive model evaluation script for BRT generation models.
 Supports UNet and Diffusion models with automatic 3D/4D detection.
 Evaluates using Chamfer distance and value function L2 error.
+Now includes wandb logging and artifact support.
 """
 
 import os
@@ -18,6 +19,9 @@ from scipy.spatial.distance import cdist
 from scipy.interpolate import interpn
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
+import wandb
+import tempfile
+import shutil
 
 # Add project modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -38,14 +42,131 @@ except ImportError as e:
     logger.warning(f"Could not import GIF generation functions: {e}")
     GIF_GENERATION_AVAILABLE = False
 
+# Define default artifacts for models
+DEFAULT_ARTIFACTS = {
+    'unet': 'malteny-stanford/brt-unet-baseline/unet-checkpoint-deep-wave-6-epoch-50:v0',
+    'diffusion': 'malteny-stanford/brt-diffusion/model-checkpoint-snowy-vortex-24-epoch-2000:v0'
+}
+
+def download_wandb_artifact(artifact_path, filename=None):
+    """
+    Download a wandb artifact and return the path to the checkpoint file.
+    
+    Args:
+        artifact_path: Full wandb artifact path (e.g., 'entity/project/artifact_name:version')
+        filename: Specific filename to look for in artifact (e.g., 'checkpoint_epoch_50.pt')
+    
+    Returns:
+        Path to the downloaded checkpoint file
+    """
+    logger.info(f"Downloading wandb artifact: {artifact_path}")
+    
+    try:
+        # For cross-project artifact access, we don't need a run context
+        # Just initialize wandb without a run
+        wandb.init(mode="disabled")  # Initialize without creating a run
+        
+        # Use the API directly for artifact access
+        api = wandb.Api()
+        artifact = api.artifact(artifact_path)
+        
+        # Download the artifact
+        artifact_dir = artifact.download()
+        
+        # Find checkpoint file
+        if filename:
+            checkpoint_path = os.path.join(artifact_dir, filename)
+            if not os.path.exists(checkpoint_path):
+                raise FileNotFoundError(f"Checkpoint file {filename} not found in artifact")
+        else:
+            # Look for common checkpoint patterns
+            checkpoint_patterns = ['*.pt', '*.pth', 'checkpoint*.pt', 'model*.pt']
+            checkpoint_path = None
+            for pattern in checkpoint_patterns:
+                import glob
+                matches = glob.glob(os.path.join(artifact_dir, pattern))
+                if matches:
+                    checkpoint_path = matches[0]
+                    break
+            
+            if checkpoint_path is None:
+                raise FileNotFoundError("No checkpoint file found in artifact")
+        
+        logger.info(f"Successfully downloaded checkpoint: {checkpoint_path}")
+        wandb.finish()
+        return checkpoint_path
+        
+    except Exception as e:
+        logger.error(f"Failed to download artifact {artifact_path}: {e}")
+        # Try alternative approach using public artifact access
+        try:
+            logger.info(f"Trying alternative download method for {artifact_path}")
+            
+            # Parse artifact path
+            parts = artifact_path.split('/')
+            if len(parts) >= 3:
+                entity = parts[0]
+                project = parts[1] 
+                artifact_name_version = '/'.join(parts[2:])
+                
+                # Try accessing with entity/project context
+                api = wandb.Api()
+                artifact = api.artifact(f"{entity}/{project}/{artifact_name_version}")
+                artifact_dir = artifact.download()
+                
+                # Find checkpoint file
+                if filename:
+                    checkpoint_path = os.path.join(artifact_dir, filename)
+                    if not os.path.exists(checkpoint_path):
+                        raise FileNotFoundError(f"Checkpoint file {filename} not found in artifact")
+                else:
+                    # Look for common checkpoint patterns
+                    checkpoint_patterns = ['*.pt', '*.pth', 'checkpoint*.pt', 'model*.pt']
+                    checkpoint_path = None
+                    for pattern in checkpoint_patterns:
+                        import glob
+                        matches = glob.glob(os.path.join(artifact_dir, pattern))
+                        if matches:
+                            checkpoint_path = matches[0]
+                            break
+                    
+                    if checkpoint_path is None:
+                        raise FileNotFoundError("No checkpoint file found in artifact")
+                
+                logger.info(f"Successfully downloaded checkpoint via alternative method: {checkpoint_path}")
+                return checkpoint_path
+                
+        except Exception as e2:
+            logger.error(f"Alternative download method also failed: {e2}")
+            
+        wandb.finish()
+        raise
+
 class ModelEvaluator:
     """Handles evaluation of different model types"""
     
-    def __init__(self, device='cuda', save_visualizations=True):
+    def __init__(self, device='cuda', save_visualizations=True, wandb_logging=False, wandb_project="model-evaluation"):
         self.device = device
         self.save_visualizations = save_visualizations
         self.max_vis_samples = 10  # Default value
         self.vis_sample_count = 0  # Track number of visualizations created
+        self.wandb_logging = wandb_logging
+        self.wandb_project = wandb_project
+        self.wandb_run = None
+        
+        # Initialize wandb if requested
+        if self.wandb_logging:
+            self.wandb_run = wandb.init(
+                project=self.wandb_project,
+                job_type="evaluation",
+                tags=["model-evaluation"],
+                settings=wandb.Settings(start_method="fork")  # Better for multiprocessing
+            )
+    
+    def __del__(self):
+        """Clean up wandb run on destruction"""
+        if self.wandb_run is not None:
+            wandb.finish()
         
     def load_model_from_checkpoint(self, checkpoint_path):
         """Load model from checkpoint and detect type automatically"""
@@ -269,11 +390,11 @@ class ModelEvaluator:
         """Generate denoising GIF for diffusion models during evaluation"""
         if not GIF_GENERATION_AVAILABLE:
             logger.warning("GIF generation not available - skipping")
-            return
+            return None
             
         if model_info['type'] != 'Diffusion':
             logger.info(f"Skipping GIF generation for {model_info['type']} model")
-            return
+            return None
             
         gif_dir = os.path.join(output_dir, 'denoising_gifs')
         os.makedirs(gif_dir, exist_ok=True)
@@ -283,7 +404,7 @@ class ModelEvaluator:
             
             if model_info['state_dim'] == 4:
                 # Use 4D GIF generation
-                generate_gif_4d(
+                gif_path = generate_gif_4d(
                     model=model,
                     dataset=dataset,
                     sample_idx=sample_idx,
@@ -292,7 +413,7 @@ class ModelEvaluator:
                 )
             else:
                 # Use 3D GIF generation  
-                generate_gif_3d(
+                gif_path = generate_gif_3d(
                     model=model,
                     dataset=dataset,
                     sample_idx=sample_idx,
@@ -302,8 +423,23 @@ class ModelEvaluator:
                 
             logger.info(f"Successfully generated denoising GIF for sample {sample_idx}")
             
+            # Log to wandb if enabled
+            if self.wandb_logging and gif_path and os.path.exists(gif_path):
+                try:
+                    wandb.log({
+                        f"denoising_gif/sample_{sample_idx}": wandb.Video(gif_path, format="gif"),
+                        f"denoising_gif/model_type": model_info['type'],
+                        f"denoising_gif/state_dim": model_info['state_dim']
+                    })
+                    logger.info(f"Logged denoising GIF to wandb: {gif_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to log GIF to wandb: {e}")
+            
+            return gif_path
+            
         except Exception as e:
             logger.error(f"Failed to generate denoising GIF: {e}")
+            return None
 
     def save_evaluation_visualizations(self, predicted_points, target_points, env_batch, 
                                      value_functions, model_info, batch_idx, output_dir, dataset):
@@ -342,17 +478,37 @@ class ModelEvaluator:
             dataset=dataset
         )
         
-        # Generate denoising GIF for diffusion models (only for first few samples)
-        if self.vis_sample_count < 3 and model_info['type'] == 'Diffusion':
+        # Log visualizations to wandb if enabled
+        if self.wandb_logging:
+            try:
+                # Log comparison plot
+                wandb.log({
+                    f"evaluation_plots/{model_name}_comparison_{self.vis_sample_count+1}": wandb.Image(save_path),
+                    f"evaluation_plots/{model_name}_detailed_{self.vis_sample_count+1}": wandb.Image(detailed_save_path),
+                    f"evaluation_plots/model_type": model_info['type'],
+                    f"evaluation_plots/state_dim": model_info['state_dim'],
+                    f"evaluation_plots/sample_idx": self.vis_sample_count+1
+                })
+                logger.info(f"Logged visualization plots to wandb")
+            except Exception as e:
+                logger.warning(f"Failed to log visualization plots to wandb: {e}")
+        
+        # Generate denoising GIF for diffusion models (for ALL visualized samples)
+        if model_info['type'] == 'Diffusion':
             # Use a deterministic sample from the dataset for GIF generation
             sample_idx = (self.vis_sample_count * 137) % min(100, len(dataset))  # Deterministic but varied
-            self.generate_denoising_gif_for_evaluation(
+            logger.info(f"Generating denoising GIF for diffusion model - visualization {self.vis_sample_count+1}/{self.max_vis_samples}, dataset sample {sample_idx}")
+            gif_path = self.generate_denoising_gif_for_evaluation(
                 model_info.get('model_instance'),  # We'll need to pass the model instance
                 model_info, 
                 dataset, 
                 sample_idx, 
                 output_dir
             )
+            if gif_path:
+                logger.info(f"Successfully generated GIF for visualization {self.vis_sample_count+1}: {gif_path}")
+            else:
+                logger.warning(f"Failed to generate GIF for visualization {self.vis_sample_count+1}")
         
         # Increment visualization counter
         self.vis_sample_count += 1
@@ -368,6 +524,14 @@ class ModelEvaluator:
         model_info['model_instance'] = model
         
         logger.info(f"Evaluating {model_type} model with {state_dim}D output")
+        
+        # Log model info to wandb if enabled
+        if self.wandb_logging:
+            wandb.log({
+                "model_info/type": model_type,
+                "model_info/state_dim": state_dim,
+                "model_info/config": model_info.get('config', {})
+            })
         
         chamfer_distances = []
         value_l2_errors = []
@@ -396,6 +560,13 @@ class ModelEvaluator:
                 )
                 chamfer_distances.append(chamfer_dist)
                 
+                # Log batch-level metrics to wandb if enabled
+                if self.wandb_logging:
+                    wandb.log({
+                        f"batch_metrics/chamfer_distance": chamfer_dist,
+                        f"batch_metrics/batch_idx": batch_idx
+                    })
+                
                 # Save visualization if we haven't reached the limit
                 if self.vis_sample_count < self.max_vis_samples:
                     self.save_evaluation_visualizations(
@@ -414,11 +585,22 @@ class ModelEvaluator:
                 chamfer_distances.append(chamfer_dist)
                 
                 # Compute value function L2 error if value functions available
+                value_l2_error = None
                 if value_functions is not None:
                     value_l2_error = self.compute_value_function_l2_error(
                         predicted_points, target_points, value_functions, dataset_with_vf
                     )
                     value_l2_errors.append(value_l2_error)
+                
+                # Log batch-level metrics to wandb if enabled
+                if self.wandb_logging:
+                    log_dict = {
+                        f"batch_metrics/chamfer_distance": chamfer_dist,
+                        f"batch_metrics/batch_idx": batch_idx
+                    }
+                    if value_l2_error is not None:
+                        log_dict[f"batch_metrics/value_l2_error"] = value_l2_error
+                    wandb.log(log_dict)
                 
                 # Save visualization if we haven't reached the limit
                 if self.vis_sample_count < self.max_vis_samples:
@@ -444,6 +626,32 @@ class ModelEvaluator:
                 'num_value_samples': len(value_l2_errors)
             })
         
+        # Log final metrics to wandb if enabled
+        if self.wandb_logging:
+            final_metrics = {
+                f"final_metrics/chamfer_distance_mean": results['chamfer_distance_mean'],
+                f"final_metrics/chamfer_distance_std": results['chamfer_distance_std'],
+                f"final_metrics/num_chamfer_samples": results['num_chamfer_samples']
+            }
+            if 'value_l2_error_mean' in results:
+                final_metrics.update({
+                    f"final_metrics/value_l2_error_mean": results['value_l2_error_mean'],
+                    f"final_metrics/value_l2_error_std": results['value_l2_error_std'],
+                    f"final_metrics/num_value_samples": results['num_value_samples']
+                })
+            wandb.log(final_metrics)
+            
+            # Create and log summary table
+            summary_data = [
+                [model_type, state_dim, results['chamfer_distance_mean'], 
+                 results.get('value_l2_error_mean', 'N/A'), results['num_chamfer_samples']]
+            ]
+            summary_table = wandb.Table(
+                data=summary_data, 
+                columns=["Model Type", "State Dim", "Chamfer Distance", "Value L2 Error", "Samples"]
+            )
+            wandb.log({"evaluation_summary": summary_table})
+        
         return results
 
 def main():
@@ -451,8 +659,16 @@ def main():
     parser.add_argument('--dataset_dir', type=str, 
                       default='1070_4d_pointcloud_3000inside_1000outside_4cloudsperenv',
                       help='Path to dataset directory')
-    parser.add_argument('--checkpoints', nargs='+', required=True,
-                      help='List of checkpoint files to evaluate')
+    parser.add_argument('--checkpoints', nargs='*', 
+                      help='List of checkpoint files to evaluate (can be local paths or wandb artifacts)')
+    parser.add_argument('--use_default_artifacts', action='store_true',
+                      help='Use default wandb artifacts for UNet and Diffusion models')
+    parser.add_argument('--unet_artifact', type=str, 
+                      default=DEFAULT_ARTIFACTS['unet'],
+                      help='Wandb artifact path for UNet model (default: malteny-stanford/brt-unet-baseline/unet-checkpoint-deep-wave-6-epoch-50:v0)')
+    parser.add_argument('--diffusion_artifact', type=str,
+                      default=DEFAULT_ARTIFACTS['diffusion'], 
+                      help='Wandb artifact path for Diffusion model (default: malteny-stanford/brt-diffusion/model-checkpoint-snowy-vortex-24-epoch-2000:v0)')
     parser.add_argument('--batch_size', type=int, default=8,
                       help='Evaluation batch size')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
@@ -470,13 +686,80 @@ def main():
     parser.add_argument('--seed', type=int, default=42,
                       help='Random seed for reproducibility')
     
+    # Wandb arguments
+    parser.add_argument('--wandb_logging', action='store_true',
+                      help='Enable wandb logging for plots and metrics')
+    parser.add_argument('--wandb_project', type=str, default='brt-model-evaluation',
+                      help='Wandb project name for logging')
+    parser.add_argument('--wandb_entity', type=str, default=None,
+                      help='Wandb entity name')
+    parser.add_argument('--wandb_api_key', type=str, default=None,
+                      help='Wandb API key (optional, can use environment variable)')
+    
     args = parser.parse_args()
+    
+    # Set wandb API key if provided
+    if args.wandb_api_key:
+        os.environ['WANDB_API_KEY'] = args.wandb_api_key
+        logger.info("Wandb API key set from command line argument")
+    elif 'WANDB_API_KEY' in os.environ:
+        logger.info("Wandb API key found in environment variables")
+    elif args.wandb_logging or args.use_default_artifacts:
+        logger.warning("Wandb functionality requested but no API key provided. This may cause authentication issues.")
     
     # Set seeds for reproducibility
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
+    
+    # Determine which checkpoints to evaluate
+    checkpoints_to_evaluate = []
+    
+    if args.use_default_artifacts:
+        logger.info("Using default wandb artifacts...")
+        # Download UNet artifact
+        try:
+            unet_checkpoint = download_wandb_artifact(args.unet_artifact, 'checkpoint_epoch_50.pt')
+            checkpoints_to_evaluate.append(('unet_default', unet_checkpoint))
+        except Exception as e:
+            logger.error(f"Failed to download UNet artifact: {e}")
+        
+        # Download Diffusion artifact
+        try:
+            diffusion_checkpoint = download_wandb_artifact(args.diffusion_artifact, 'checkpoint_epoch_2000.pt')
+            checkpoints_to_evaluate.append(('diffusion_default', diffusion_checkpoint))
+        except Exception as e:
+            logger.error(f"Failed to download Diffusion artifact: {e}")
+    
+    # Add any manually specified checkpoints
+    if args.checkpoints:
+        for checkpoint in args.checkpoints:
+            # Check if it's a wandb artifact path (entity/project/artifact:version format)
+            if ('/' in checkpoint and ':' in checkpoint and not os.path.exists(checkpoint)) or checkpoint.count('/') >= 2:
+                # Looks like a wandb artifact path
+                try:
+                    local_checkpoint = download_wandb_artifact(checkpoint)
+                    checkpoints_to_evaluate.append((f'artifact_{os.path.basename(checkpoint)}', local_checkpoint))
+                except Exception as e:
+                    logger.error(f"Failed to download artifact {checkpoint}: {e}")
+            else:
+                # Local file path
+                if os.path.exists(checkpoint):
+                    checkpoints_to_evaluate.append((f'local_{os.path.basename(checkpoint)}', checkpoint))
+                else:
+                    logger.error(f"Checkpoint not found: {checkpoint}")
+                    # Try as artifact path as fallback
+                    try:
+                        logger.info(f"Trying to interpret {checkpoint} as wandb artifact...")
+                        local_checkpoint = download_wandb_artifact(checkpoint)
+                        checkpoints_to_evaluate.append((f'artifact_{os.path.basename(checkpoint)}', local_checkpoint))
+                    except Exception as e2:
+                        logger.error(f"Also failed as artifact: {e2}")
+    
+    if not checkpoints_to_evaluate:
+        logger.error("No valid checkpoints found to evaluate!")
+        return
     
     # Create timestamped output directory
     from datetime import datetime
@@ -487,7 +770,30 @@ def main():
     # Setup
     device = torch.device(args.device)
     
-    evaluator = ModelEvaluator(device=device, save_visualizations=not args.no_visualizations)
+    evaluator = ModelEvaluator(
+        device=device, 
+        save_visualizations=not args.no_visualizations,
+        wandb_logging=args.wandb_logging,
+        wandb_project=args.wandb_project
+    )
+    
+    # Initialize wandb for the overall evaluation run if requested
+    if args.wandb_logging:
+        # Configure wandb
+        wandb_config = {
+            'dataset_dir': args.dataset_dir,
+            'split': args.split,
+            'batch_size': args.batch_size,
+            'device': args.device,
+            'seed': args.seed,
+            'max_vis_samples': args.max_vis_samples,
+            'num_checkpoints': len(checkpoints_to_evaluate),
+            'timestamp': timestamp
+        }
+        
+        # Set up wandb entity if provided
+        if args.wandb_entity:
+            wandb_config['entity'] = args.wandb_entity
     
     # Load dataset
     logger.info(f"Loading {args.split} dataset...")
@@ -515,22 +821,21 @@ def main():
         f.write(f"Device: {args.device}\n")
         f.write(f"Seed: {args.seed}\n")
         f.write(f"Max visualization samples: {args.max_vis_samples}\n")
-        f.write(f"Checkpoints to evaluate: {len(args.checkpoints)}\n")
-        for i, checkpoint in enumerate(args.checkpoints):
-            f.write(f"  {i+1}. {checkpoint}\n")
+        f.write(f"Wandb logging: {args.wandb_logging}\n")
+        if args.wandb_logging:
+            f.write(f"Wandb project: {args.wandb_project}\n")
+        f.write(f"Checkpoints to evaluate: {len(checkpoints_to_evaluate)}\n")
+        for i, (name, checkpoint_path) in enumerate(checkpoints_to_evaluate):
+            f.write(f"  {i+1}. {name}: {checkpoint_path}\n")
         f.write(f"\n")
     
     # Evaluate each checkpoint
     all_results = []
     results_summary = []
     
-    for checkpoint_idx, checkpoint_path in enumerate(args.checkpoints):
-        if not os.path.exists(checkpoint_path):
-            logger.error(f"Checkpoint not found: {checkpoint_path}")
-            continue
-            
+    for checkpoint_idx, (checkpoint_name, checkpoint_path) in enumerate(checkpoints_to_evaluate):
         try:
-            logger.info(f"Evaluating checkpoint {checkpoint_idx+1}/{len(args.checkpoints)}: {checkpoint_path}")
+            logger.info(f"Evaluating checkpoint {checkpoint_idx+1}/{len(checkpoints_to_evaluate)}: {checkpoint_name} ({checkpoint_path})")
             
             # Load model
             model, model_info = evaluator.load_model_from_checkpoint(checkpoint_path)
@@ -550,11 +855,12 @@ def main():
             # Evaluate
             results = evaluator.evaluate_model(model, model_info, loader, dataset_for_denorm, args.output_dir)
             results['checkpoint_path'] = checkpoint_path
+            results['checkpoint_name'] = checkpoint_name
             results['checkpoint_basename'] = os.path.basename(checkpoint_path)
             results['evaluation_timestamp'] = timestamp
             
             # Log results
-            logger.info(f"Results for {checkpoint_path}:")
+            logger.info(f"Results for {checkpoint_name}:")
             logger.info(f"  Model Type: {results['model_type']}")
             logger.info(f"  State Dim: {results['state_dim']}")
             logger.info(f"  Chamfer Distance: {results['chamfer_distance_mean']:.6f} ± {results['chamfer_distance_std']:.6f}")
@@ -565,7 +871,7 @@ def main():
             
             # Create summary for this model
             summary = f"Model: {results['model_type']} ({results['state_dim']}D)\n"
-            summary += f"Checkpoint: {results['checkpoint_basename']}\n"
+            summary += f"Checkpoint: {checkpoint_name}\n"
             summary += f"Chamfer Distance: {results['chamfer_distance_mean']:.6f} ± {results['chamfer_distance_std']:.6f}\n"
             if 'value_l2_error_mean' in results:
                 summary += f"Value L2 Error: {results['value_l2_error_mean']:.6f} ± {results['value_l2_error_std']:.6f}\n"
@@ -574,7 +880,7 @@ def main():
             results_summary.append(summary)
             
         except Exception as e:
-            logger.error(f"Failed to evaluate {checkpoint_path}: {e}")
+            logger.error(f"Failed to evaluate {checkpoint_name}: {e}")
             import traceback
             traceback.print_exc()
             continue
@@ -605,7 +911,7 @@ def main():
         
         for result in all_results:
             f.write(f"Model: {result['model_type']} ({result['state_dim']}D)\n")
-            f.write(f"Checkpoint: {result['checkpoint_basename']}\n")
+            f.write(f"Checkpoint: {result['checkpoint_name']}\n")
             f.write("-" * 40 + "\n")
             f.write(f"Chamfer Distance:\n")
             f.write(f"  Mean: {result['chamfer_distance_mean']:.8f}\n")
@@ -623,6 +929,37 @@ def main():
                 f.write(f"  {key}: {value}\n")
             f.write(f"\n")
     
+    # Log final comparison results to wandb if enabled
+    if args.wandb_logging and all_results:
+        # Create comparison table
+        comparison_data = []
+        for result in all_results:
+            comparison_data.append([
+                result['checkpoint_name'],
+                result['model_type'],
+                result['state_dim'],
+                result['chamfer_distance_mean'],
+                result['chamfer_distance_std'],
+                result.get('value_l2_error_mean', 'N/A'),
+                result.get('value_l2_error_std', 'N/A'),
+                result['num_chamfer_samples']
+            ])
+        
+        comparison_table = wandb.Table(
+            data=comparison_data,
+            columns=["Checkpoint", "Model Type", "State Dim", "Chamfer Mean", "Chamfer Std", 
+                    "Value L2 Mean", "Value L2 Std", "Samples"]
+        )
+        wandb.log({"evaluation_comparison": comparison_table})
+        
+        # Log result files as artifacts
+        if os.path.exists(results_file):
+            wandb.save(results_file)
+        if os.path.exists(results_text_file):
+            wandb.save(results_text_file)
+        if os.path.exists(info_file):
+            wandb.save(info_file)
+    
     logger.info(f"Evaluation complete! Results saved to {args.output_dir}")
     logger.info(f"  JSON results: {results_file}")
     logger.info(f"  Text results: {results_text_file}")
@@ -636,6 +973,8 @@ def main():
     print(f"Dataset: {args.dataset_dir} ({args.split} split)")
     print(f"Total samples: {len(dataset)}")
     print(f"Results saved to: {args.output_dir}")
+    if args.wandb_logging:
+        print(f"Wandb project: {args.wandb_project}")
     print()
     
     for summary in results_summary:

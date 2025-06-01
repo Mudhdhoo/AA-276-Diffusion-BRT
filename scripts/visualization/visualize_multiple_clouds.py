@@ -11,7 +11,7 @@ from dataset.BRTDataset import BRTDataset
 
 def visualize_point_clouds(ax, points, title, color='b', alpha=0.6):
     """Visualize a single point cloud on the given axis"""
-    ax.scatter(-points[:, 1], points[:, 0], points[:, 2], 
+    ax.scatter(points[:, 0], points[:, 1], points[:, 2], 
               c=color, alpha=alpha, s=1)
     ax.set_title(title)
     ax.set_xlabel('X')
