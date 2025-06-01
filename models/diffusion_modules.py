@@ -77,16 +77,19 @@ class PointDiffusionNetwork(nn.Module):
         self.blocks = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(hidden_dim + time_dim + env_dim, hidden_dim),
-                nn.ReLU(),
+                nn.GroupNorm(8, hidden_dim),
+                nn.SiLU(),
                 nn.Linear(hidden_dim, hidden_dim),
-                nn.ReLU()
+                nn.GroupNorm(8, hidden_dim),
+                nn.SiLU()
             ) for _ in range(4)
         ])
         
         # Output projection
         self.output_proj = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
+            nn.GroupNorm(8, hidden_dim // 2),
+            nn.SiLU(),
             nn.Linear(hidden_dim // 2, state_dim)
         )
         
