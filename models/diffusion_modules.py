@@ -118,7 +118,7 @@ class PointDiffusionNetwork(nn.Module):
         self.time_mlp = nn.Sequential(
             SinusoidalPositionEmbeddings(time_dim),
             nn.Linear(time_dim, time_dim * 2),
-            nn.ReLU(),
+            nn.SiLU(),
             nn.Linear(time_dim * 2, time_dim)
         )
         
@@ -132,16 +132,16 @@ class PointDiffusionNetwork(nn.Module):
         self.blocks = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(hidden_dim + time_dim + env_dim + pointnet_dim, hidden_dim),
-                nn.ReLU(),
+                nn.SiLU(),
                 nn.Linear(hidden_dim, hidden_dim),
-                nn.ReLU()
+                nn.SiLU()
             ) for _ in range(4)
         ])
         
         # Output projection
         self.output_proj = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
+            nn.SiLU(),
             nn.Linear(hidden_dim // 2, state_dim)
         )
         
