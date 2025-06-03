@@ -350,52 +350,41 @@ class ModelEvaluator:
             pred_denorm = dataset.denormalize_points(pred_points[b].cpu().numpy())  # (N, 4)
             value_func_3d = value_function[b].cpu().numpy()  # (64, 64, 64)
             
-            # COORDINATE SYSTEM CLARIFICATION:
-            # Both environment and value function arrays follow the convention:
-            # array[y_idx, x_idx, theta_idx] where:
-            # - y_idx: 0 to 63 → y-coordinate 0 to 10
-            # - x_idx: 0 to 63 → x-coordinate 0 to 10  
-            # - theta_idx: 0 to 63 → theta-coordinate -π to π
+            # Extract coordinates and values
+            coords = pred_denorm[:, :3]  # [x, y, theta]
+            pred_values = pred_denorm[:, 3]  # values from point cloud
             
-            # When using scipy.interpn, we need to be careful about coordinate order
-            # interpn expects: interpn((coord1_grid, coord2_grid, coord3_grid), values, query_points)
-            # where values[i, j, k] corresponds to (coord1_grid[i], coord2_grid[j], coord3_grid[k])
+            # Use perfect inverse scaling (matching dataset generation)
+            x_indices = (coords[:, 0] / 10.0 * 64).clip(0, 63)
+            y_indices = (coords[:, 1] / 10.0 * 64).clip(0, 63)
+            theta_indices = ((coords[:, 2] + np.pi) / (2 * np.pi) * 64).clip(0, 63)
             
-            # Since value_func_3d[y_idx, x_idx, theta_idx], we need:
-            y_coords = np.linspace(0, 10, 64)     # First dimension: y
-            x_coords = np.linspace(0, 10, 64)     # Second dimension: x
-            theta_coords = np.linspace(-np.pi, np.pi, 64)  # Third dimension: theta
+            # Stack indices for interpolation
+            grid_coords = np.stack([x_indices, y_indices, theta_indices], axis=1)
             
-            # Extract 3D coordinates from predicted points
-            pred_coords = pred_denorm[:, :3]  # (N, 3) - [x, y, theta]
-            pred_values = pred_denorm[:, 3]   # (N,) - predicted values
+            # Define grid coordinates for interpolation
+            x_coords = np.arange(64)
+            y_coords = np.arange(64)
+            theta_coords = np.arange(64)
             
-            # Clamp coordinates to valid range to avoid extrapolation issues
-            pred_coords[:, 0] = np.clip(pred_coords[:, 0], 0, 10)  # x
-            pred_coords[:, 1] = np.clip(pred_coords[:, 1], 0, 10)  # y
-            pred_coords[:, 2] = np.clip(pred_coords[:, 2], -np.pi, np.pi)  # theta
-            
-            # Reorder query points to match array indexing: [x, y, theta] → [y, x, theta]
-            pred_coords_reordered = pred_coords[:, [1, 0, 2]]  # [y, x, theta]
-            
-            # Interpolate true values at predicted coordinates
+            # Interpolate value function at point coordinates
             try:
-                true_values = interpn(
-                    (y_coords, x_coords, theta_coords),  # Grid coordinates [y, x, theta]
-                    value_func_3d,                       # Values array [y_idx, x_idx, theta_idx]
-                    pred_coords_reordered,               # Query points [y, x, theta]
+                interpolated_values = interpn(
+                    (x_coords, y_coords, theta_coords),
+                    value_func_3d,
+                    grid_coords,
                     method='linear',
                     bounds_error=False,
-                    fill_value=0.0
+                    fill_value=1.0
                 )
                 
                 # Compute L2 error
-                l2_error = np.mean((pred_values - true_values) ** 2)
+                l2_error = np.mean((pred_values - interpolated_values) ** 2)
                 total_l2_error += l2_error
                 
             except Exception as e:
                 logger.warning(f"Interpolation failed for batch {b}: {e}")
-                logger.warning(f"pred_coords_reordered shape: {pred_coords_reordered.shape}")
+                logger.warning(f"grid_coords shape: {grid_coords.shape}")
                 logger.warning(f"value_func_3d shape: {value_func_3d.shape}")
                 total_l2_error += float('inf')
         
