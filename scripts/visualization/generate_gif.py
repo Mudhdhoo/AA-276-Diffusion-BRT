@@ -147,23 +147,25 @@ def generate_denoising_gif(model, dataset, sample_idx, num_frames=50, save_dir="
         points = dataset.denormalize_points(points)
         
         # Scale coordinates to match environment dimensions
-        x = points[:, 0] * (10.0 / 64.0)  # Scale x from [0,64] to [0,10]
-        y = points[:, 1] * (10.0 / 64.0)  # Scale y from [0,64] to [0,10]
-        theta = points[:, 2] * (2 * np.pi / 64.0) - np.pi  # Scale theta from [0,64] to [-π,π]
+        x = points[:, 0]
+        y = points[:, 1]
+        theta = points[:, 2]
+        c = points[:, 3]  # Get the 4th dimension for coloring
         
         # Update main scatter plot
         scatter_main._offsets3d = (x, y, theta)
+        scatter_main.set_array(c)  # Update the colors
         
         # Update title based on whether we're in the holding frames
         if frame < num_frames:
             current_timestep = model.num_timesteps - 1 - timesteps[frame]
-            ax_main.set_title(f'Denoising Step t={current_timestep}', 
+            title = ax_main.set_title(f'Denoising Step t={current_timestep}', 
                             fontsize=16, fontweight='bold', pad=25, color='black')
         else:
-            ax_main.set_title('Final Denoised State', 
+            title = ax_main.set_title('Final Denoised State', 
                             fontsize=16, fontweight='bold', pad=25, color='black')
         
-        return scatter_main  # Return only the scatter plot object
+        return scatter_main, title  # Return all artists that are being updated
     
     # Create animation
     anim = FuncAnimation(
