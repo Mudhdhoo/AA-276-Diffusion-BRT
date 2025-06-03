@@ -29,7 +29,7 @@ def parse_args():
 def generate_denoising_gif(model, dataset, sample_idx, num_frames=50, save_dir="plots/gifs"):
     """Generate a GIF showing the denoising process for a sample from the dataset."""
     # Get sample from dataset
-    point_cloud, env_grid = dataset[sample_idx]
+    point_cloud, env_grid, *_ = dataset[sample_idx]  # Use wildcard to handle extra return values
     point_cloud = point_cloud.unsqueeze(0).to(model.device)  # Add batch dimension
     env_grid = env_grid.unsqueeze(0).to(model.device)  # Add batch dimension
     
