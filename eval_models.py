@@ -344,6 +344,7 @@ class ModelEvaluator:
         """
         batch_size = pred_points.shape[0]
         total_l2_error = 0.0
+        total_points = 0
         
         for b in range(batch_size):
             # Denormalize predicted points to physical coordinates
@@ -380,7 +381,8 @@ class ModelEvaluator:
                 
                 # Compute L2 error
                 l2_error = np.mean((pred_values - interpolated_values) ** 2)
-                total_l2_error += l2_error
+                total_l2_error += l2_error * len(pred_values)  # Weight by number of points
+                total_points += len(pred_values)  # Count total points
                 
             except Exception as e:
                 logger.warning(f"Interpolation failed for batch {b}: {e}")
@@ -388,7 +390,7 @@ class ModelEvaluator:
                 logger.warning(f"value_func_3d shape: {value_func_3d.shape}")
                 total_l2_error += float('inf')
         
-        return total_l2_error / batch_size
+        return total_l2_error / total_points if total_points > 0 else float('inf'), total_points
     
     def generate_denoising_gif_for_evaluation(self, model, model_info, dataset, sample_idx, output_dir):
         """Generate denoising GIF for diffusion models during evaluation"""
@@ -464,6 +466,47 @@ class ModelEvaluator:
         pred_sample = predicted_points[0].cpu().numpy()
         target_sample = target_points[0].cpu().numpy()
         env_sample = env_batch[0].cpu().numpy()
+        value_func_sample = value_functions[0].cpu().numpy() if value_functions is not None else None
+        
+        # Compute L2 error for this sample if we have value functions
+        sample_l2_error = None
+        if value_func_sample is not None and model_info['state_dim'] == 4:
+            # Denormalize predicted points to physical coordinates
+            pred_denorm = dataset.denormalize_points(pred_sample)  # (N, 4)
+            
+            # Extract coordinates and values
+            coords = pred_denorm[:, :3]  # [x, y, theta]
+            pred_values = pred_denorm[:, 3]  # values from point cloud
+            
+            # Use perfect inverse scaling (matching dataset generation)
+            x_indices = (coords[:, 0] / 10.0 * 64).clip(0, 63)
+            y_indices = (coords[:, 1] / 10.0 * 64).clip(0, 63)
+            theta_indices = ((coords[:, 2] + np.pi) / (2 * np.pi) * 64).clip(0, 63)
+            
+            # Stack indices for interpolation
+            grid_coords = np.stack([x_indices, y_indices, theta_indices], axis=1)
+            
+            # Define grid coordinates for interpolation
+            x_coords = np.arange(64)
+            y_coords = np.arange(64)
+            theta_coords = np.arange(64)
+            
+            # Interpolate value function at point coordinates
+            try:
+                interpolated_values = interpn(
+                    (x_coords, y_coords, theta_coords),
+                    value_func_sample,
+                    grid_coords,
+                    method='linear',
+                    bounds_error=False,
+                    fill_value=1.0
+                )
+                
+                # Compute L2 error for this sample
+                sample_l2_error = np.mean((pred_values - interpolated_values) ** 2)
+                
+            except Exception as e:
+                logger.warning(f"Failed to compute L2 error for visualization: {e}")
         
         # Create regular comparison visualization with proper denormalization
         save_path = os.path.join(output_dir, f"{model_name}{split_info}_sample_{self.vis_sample_count+1:03d}_comparison.png")
@@ -480,7 +523,8 @@ class ModelEvaluator:
             target_sample, pred_sample, env_sample,
             title=f"{model_name} - {self.current_split.capitalize()} Split - Sample {self.vis_sample_count+1} Detailed Analysis",
             save_path=detailed_save_path,
-            dataset=dataset
+            dataset=dataset,
+            sample_l2_error=sample_l2_error  # Pass the computed L2 error
         )
         
         # Log visualizations to wandb if enabled
@@ -495,7 +539,8 @@ class ModelEvaluator:
                     f"{base_path}/detailed_{self.vis_sample_count+1}": wandb.Image(detailed_save_path),
                     f"{base_path}/model_type": model_info['type'],
                     f"{base_path}/state_dim": model_info['state_dim'],
-                    f"{base_path}/sample_idx": self.vis_sample_count+1
+                    f"{base_path}/sample_idx": self.vis_sample_count+1,
+                    f"{base_path}/sample_l2_error": sample_l2_error if sample_l2_error is not None else 0.0
                 })
                 logger.info(f"Logged visualization plots to wandb under {base_path}")
             except Exception as e:
@@ -555,8 +600,8 @@ class ModelEvaluator:
                 f"{base_path}/model_info/config": model_info.get('config', {})
             })
         
-        # chamfer_distances = []  # Commented out Chamfer distance
         value_l2_errors = []
+        total_points_evaluated = 0
         
         # Create visualization directory
         vis_dir = os.path.join(output_dir, f"visualizations_{model_type}_{state_dim}D")
@@ -585,16 +630,18 @@ class ModelEvaluator:
                 with logger.contextualize(operation="metrics"):
                     # Compute value function error if available
                     if value_functions is not None and state_dim == 4:
-                        value_l2_error = self.compute_value_function_l2_error(
+                        value_l2_error, batch_points = self.compute_value_function_l2_error(
                             predicted_points, target_points, value_functions, dataset_with_vf
                         )
                         value_l2_errors.append(value_l2_error)
+                        total_points_evaluated += batch_points
                         
                         # Log batch metrics to wandb
                         if self.wandb_logging:
                             wandb.log({
                                 f"{model_type.lower()}/{self.current_split}/batch_value_l2_error": value_l2_error,
-                                f"{model_type.lower()}/{self.current_split}/batch_idx": batch_idx
+                                f"{model_type.lower()}/{self.current_split}/batch_idx": batch_idx,
+                                f"{model_type.lower()}/{self.current_split}/total_points": total_points_evaluated
                             })
                 
                 # Store samples for visualization if needed
@@ -623,16 +670,13 @@ class ModelEvaluator:
             'model_type': model_type,
             'state_dim': state_dim,
             'config': model_info['config'],
-            # 'chamfer_distance_mean': np.mean(chamfer_distances),  # Commented out Chamfer distance
-            # 'chamfer_distance_std': np.std(chamfer_distances),   # Commented out Chamfer distance
-            # 'num_chamfer_samples': len(chamfer_distances)        # Commented out Chamfer distance
         }
         
         if value_l2_errors:
             results.update({
                 'value_l2_error_mean': np.mean(value_l2_errors),
                 'value_l2_error_std': np.std(value_l2_errors),
-                'num_value_samples': len(value_l2_errors)
+                'num_value_samples': total_points_evaluated
             })
             
             # Log final metrics to wandb
@@ -902,12 +946,19 @@ def main():
             f.write(f"Split: {result['split']}\n")
             f.write(f"Checkpoint: {result['checkpoint_name']}\n")
             f.write("-" * 40 + "\n")
-            f.write(f"Value Function L2 Error:\n")
-            f.write(f"  Mean: {result['value_l2_error_mean']:.8f}\n")
-            f.write(f"  Std:  {result['value_l2_error_std']:.8f}\n")
-            f.write(f"  Samples: {result['num_value_samples']}\n")
             
-            f.write(f"Configuration:\n")
+            # Value Function Statistics
+            if 'value_l2_error_mean' in result:
+                f.write(f"Value Function L2 Error:\n")
+                f.write(f"  Mean: {result['value_l2_error_mean']:.8f}\n")
+                f.write(f"  Std:  {result['value_l2_error_std']:.8f}\n")
+                f.write(f"  Total Points Evaluated: {result['num_value_samples']:,}\n")
+                f.write(f"  Per-Point Statistics:\n")
+                f.write(f"    - Average error per point: {result['value_l2_error_mean']:.8f}\n")
+                f.write(f"    - Error range: [{result['value_l2_error_mean'] - result['value_l2_error_std']:.8f}, {result['value_l2_error_mean'] + result['value_l2_error_std']:.8f}]\n")
+                f.write(f"    - Relative error: {(result['value_l2_error_mean'] / result['value_l2_error_std']):.2f}%\n")
+            
+            f.write(f"\nConfiguration:\n")
             for key, value in result.get('config', {}).items():
                 f.write(f"  {key}: {value}\n")
             f.write(f"\n")
