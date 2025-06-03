@@ -17,12 +17,7 @@ import json
 from loguru import logger
 from scipy.spatial.distance import cdist
 from scipy.interpolate import interpn
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation, PillowWriter
 import wandb
-import tempfile
-import shutil
-import time
 
 # Add project modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -30,7 +25,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from dataset.BRTDataset import BRTDataset
 from models.unet_baseline import BRTUNet
 from models.diffusion_modules import BRTDiffusionModel
-from utils.visualizations import visualize_comparison, visualize_point_cloud, visualize_environment_grid, visualize_detailed_value_function_comparison, create_dual_colormap
+from utils.visualizations import visualize_comparison, visualize_detailed_value_function_comparison
 
 # Import the existing gif generation functions
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scripts', 'visualization'))
@@ -275,100 +270,61 @@ class ModelEvaluator:
                 predicted = model(env_batch, target_state_dim=target_state_dim)
                 
             elif model_type == 'Diffusion':
-                # Diffusion sampling
-                predicted_list = []
-                for i in range(batch_size):
-                    # Sample one environment at a time for diffusion
-                    env_single = env_batch[i:i+1]
-                    sample = model.sample(env_single, num_samples=1, guidance_scale=1.5)
-                    if target_state_dim is not None and sample.shape[-1] > target_state_dim:
-                        sample = sample[:, :, :target_state_dim]
-                    predicted_list.append(sample[0])  # Remove batch dimension
-                predicted = torch.stack(predicted_list, dim=0)
+                # Fixed: Batch diffusion sampling for much better GPU efficiency
+                # Generate one sample per environment in the batch
+                predicted = self.sample_batch_diffusion(model, env_batch, guidance_scale=1.5)
+                
+                if target_state_dim is not None and predicted.shape[-1] > target_state_dim:
+                    predicted = predicted[:, :, :target_state_dim]
             else:
                 raise ValueError(f"Unknown model type: {model_type}")
         
         return predicted
     
-    def compute_chamfer_distance(self, pred_points, target_points, chunk_size=500):
-        """Compute chunked Chamfer distance for large point clouds"""
-        batch_size, N, D = pred_points.shape
-        _, M, _ = target_points.shape
+    def sample_batch_diffusion(self, model, env_batch, guidance_scale=1.0):
+        """
+        Efficient batch sampling for diffusion models.
+        Generate one sample per environment in the batch.
         
-        total_chamfer = 0.0
+        The original model.sample() method takes a single environment and generates 
+        num_samples for that environment. But we want to generate one sample per 
+        different environment in env_batch.
+        """
+        batch_size = env_batch.shape[0]
         
-        for b in range(batch_size):
-            pred_b = pred_points[b].cpu().numpy()  # (N, D)
-            target_b = target_points[b].cpu().numpy()  # (M, D)
-            
-            # Chunked computation for memory efficiency
-            min_dists_pred_to_target = []
-            for i in range(0, N, chunk_size):
-                end_i = min(i + chunk_size, N)
-                pred_chunk = pred_b[i:end_i]  # (chunk_size, D)
-                
-                # Compute distances from pred_chunk to all target points
-                dists = cdist(pred_chunk, target_b, metric='euclidean')  # (chunk_size, M)
-                min_dists = np.min(dists, axis=1)  # (chunk_size,)
-                min_dists_pred_to_target.append(min_dists)
-            
-            min_dists_pred_to_target = np.concatenate(min_dists_pred_to_target)
-            
-            # Compute target to pred distances
-            min_dists_target_to_pred = []
-            for j in range(0, M, chunk_size):
-                end_j = min(j + chunk_size, M)
-                target_chunk = target_b[j:end_j]  # (chunk_size, D)
-                
-                # Compute distances from target_chunk to all pred points
-                dists = cdist(target_chunk, pred_b, metric='euclidean')  # (chunk_size, N)
-                min_dists = np.min(dists, axis=1)  # (chunk_size,)
-                min_dists_target_to_pred.append(min_dists)
-            
-            min_dists_target_to_pred = np.concatenate(min_dists_target_to_pred)
-            
-            # Chamfer distance for this batch item
-            chamfer_b = np.mean(min_dists_pred_to_target) + np.mean(min_dists_target_to_pred)
-            total_chamfer += chamfer_b
+        # Start from pure noise for all environments
+        x_t = torch.randn(batch_size, model.num_points, model.state_dim).to(model.device)
         
-        return total_chamfer / batch_size
+        # Reverse diffusion process with guidance
+        # The p_sample method properly handles batched environments and batched x_t
+        for t in reversed(range(model.num_timesteps)):
+            t_batch = torch.full((batch_size,), t, device=model.device, dtype=torch.long)
+            x_t = model.p_sample(x_t, t_batch, env_batch, guidance_scale)
+        
+        return x_t
     
     def compute_value_function_l2_error(self, pred_points, target_points, value_function, dataset):
         """
         Compute L2 error between predicted values and interpolated true values.
-        
-        pred_points: (batch_size, N, 4) - predicted points with values in 4th dimension
-        target_points: (batch_size, M, 4) - target points with values in 4th dimension  
-        value_function: (batch_size, 64, 64, 64) - true value function grid
-        dataset: BRTDataset instance for denormalization
+        Returns per-pointcloud mean and std L2 error.
         """
         batch_size = pred_points.shape[0]
-        total_l2_error = 0.0
+        l2_means = []
+        l2_stds = []
         total_points = 0
         
         for b in range(batch_size):
-            # Denormalize predicted points to physical coordinates
             pred_denorm = dataset.denormalize_points(pred_points[b].cpu().numpy())  # (N, 4)
             value_func_3d = value_function[b].cpu().numpy()  # (64, 64, 64)
-            
-            # Extract coordinates and values
-            coords = pred_denorm[:, :3]  # [x, y, theta]
-            pred_values = pred_denorm[:, 3]  # values from point cloud
-            
-            # Use perfect inverse scaling (matching dataset generation)
+            coords = pred_denorm[:, :3]
+            pred_values = pred_denorm[:, 3]
             x_indices = (coords[:, 0] / 10.0 * 64).clip(0, 63)
             y_indices = (coords[:, 1] / 10.0 * 64).clip(0, 63)
             theta_indices = ((coords[:, 2] + np.pi) / (2 * np.pi) * 64).clip(0, 63)
-            
-            # Stack indices for interpolation
             grid_coords = np.stack([x_indices, y_indices, theta_indices], axis=1)
-            
-            # Define grid coordinates for interpolation
             x_coords = np.arange(64)
             y_coords = np.arange(64)
             theta_coords = np.arange(64)
-            
-            # Interpolate value function at point coordinates
             try:
                 interpolated_values = interpn(
                     (x_coords, y_coords, theta_coords),
@@ -378,19 +334,15 @@ class ModelEvaluator:
                     bounds_error=False,
                     fill_value=1.0
                 )
-                
-                # Compute L2 error
-                l2_error = np.mean((pred_values - interpolated_values) ** 2)
-                total_l2_error += l2_error * len(pred_values)  # Weight by number of points
-                total_points += len(pred_values)  # Count total points
-                
+                errors = (pred_values - interpolated_values)
+                l2 = (errors ** 2)
+                l2_means.append(np.mean(l2))
+                l2_stds.append(np.std(l2))
+                total_points += len(pred_values)
             except Exception as e:
-                logger.warning(f"Interpolation failed for batch {b}: {e}")
-                logger.warning(f"grid_coords shape: {grid_coords.shape}")
-                logger.warning(f"value_func_3d shape: {value_func_3d.shape}")
-                total_l2_error += float('inf')
-        
-        return total_l2_error / total_points if total_points > 0 else float('inf'), total_points
+                l2_means.append(float('inf'))
+                l2_stds.append(float('inf'))
+        return l2_means, l2_stds, total_points
     
     def generate_denoising_gif_for_evaluation(self, model, model_info, dataset, sample_idx, output_dir):
         """Generate denoising GIF for diffusion models during evaluation"""
@@ -448,7 +400,7 @@ class ModelEvaluator:
             return None
 
     def save_evaluation_visualizations(self, predicted_points, target_points, env_batch, 
-                                     value_functions, model_info, batch_idx, output_dir, dataset):
+                                     value_functions, model_info, batch_idx, output_dir, dataset, l2_title=None):
         """Save visualization of predictions for sanity check"""
         if not self.save_visualizations:
             return
@@ -467,47 +419,7 @@ class ModelEvaluator:
         target_sample = target_points[0].cpu().numpy()
         env_sample = env_batch[0].cpu().numpy()
         value_func_sample = value_functions[0].cpu().numpy() if value_functions is not None else None
-        
-        # Compute L2 error for this sample if we have value functions
-        sample_l2_error = None
-        if value_func_sample is not None and model_info['state_dim'] == 4:
-            # Denormalize predicted points to physical coordinates
-            pred_denorm = dataset.denormalize_points(pred_sample)  # (N, 4)
-            
-            # Extract coordinates and values
-            coords = pred_denorm[:, :3]  # [x, y, theta]
-            pred_values = pred_denorm[:, 3]  # values from point cloud
-            
-            # Use perfect inverse scaling (matching dataset generation)
-            x_indices = (coords[:, 0] / 10.0 * 64).clip(0, 63)
-            y_indices = (coords[:, 1] / 10.0 * 64).clip(0, 63)
-            theta_indices = ((coords[:, 2] + np.pi) / (2 * np.pi) * 64).clip(0, 63)
-            
-            # Stack indices for interpolation
-            grid_coords = np.stack([x_indices, y_indices, theta_indices], axis=1)
-            
-            # Define grid coordinates for interpolation
-            x_coords = np.arange(64)
-            y_coords = np.arange(64)
-            theta_coords = np.arange(64)
-            
-            # Interpolate value function at point coordinates
-            try:
-                interpolated_values = interpn(
-                    (x_coords, y_coords, theta_coords),
-                    value_func_sample,
-                    grid_coords,
-                    method='linear',
-                    bounds_error=False,
-                    fill_value=1.0
-                )
                 
-                # Compute L2 error for this sample
-                sample_l2_error = np.mean((pred_values - interpolated_values) ** 2)
-                
-            except Exception as e:
-                logger.warning(f"Failed to compute L2 error for visualization: {e}")
-        
         # Create regular comparison visualization with proper denormalization
         save_path = os.path.join(output_dir, f"{model_name}{split_info}_sample_{self.vis_sample_count+1:03d}_comparison.png")
         visualize_comparison(
@@ -519,12 +431,12 @@ class ModelEvaluator:
         
         # Create detailed comparison visualization with theta slices
         detailed_save_path = os.path.join(output_dir, f"{model_name}{split_info}_sample_{self.vis_sample_count+1:03d}_detailed.png")
+        detailed_title = l2_title if l2_title is not None else f"{model_name} - {self.current_split.capitalize()} Split - Sample {self.vis_sample_count+1} Detailed Analysis"
         visualize_detailed_value_function_comparison(
             target_sample, pred_sample, env_sample,
-            title=f"{model_name} - {self.current_split.capitalize()} Split - Sample {self.vis_sample_count+1} Detailed Analysis",
+            title=detailed_title,
             save_path=detailed_save_path,
             dataset=dataset,
-            sample_l2_error=sample_l2_error  # Pass the computed L2 error
         )
         
         # Log visualizations to wandb if enabled
@@ -540,7 +452,6 @@ class ModelEvaluator:
                     f"{base_path}/model_type": model_info['type'],
                     f"{base_path}/state_dim": model_info['state_dim'],
                     f"{base_path}/sample_idx": self.vis_sample_count+1,
-                    f"{base_path}/sample_l2_error": sample_l2_error if sample_l2_error is not None else 0.0
                 })
                 logger.info(f"Logged visualization plots to wandb under {base_path}")
             except Exception as e:
@@ -600,17 +511,11 @@ class ModelEvaluator:
                 f"{base_path}/model_info/config": model_info.get('config', {})
             })
         
-        value_l2_errors = []
+        all_l2_means = []
+        all_l2_stds = []
         total_points_evaluated = 0
-        
-        # Create visualization directory
-        vis_dir = os.path.join(output_dir, f"visualizations_{model_type}_{state_dim}D")
-        
-        # Store samples for visualization
         vis_samples = []
         batch_count = 0
-        
-        logger.info("Starting evaluation loop...")
         for batch_idx, batch_data in enumerate(tqdm(test_loader, desc="Evaluating")):
             logger.debug(f"Processing batch {batch_idx}")
             with logger.contextualize(batch=batch_idx):
@@ -630,23 +535,25 @@ class ModelEvaluator:
                 with logger.contextualize(operation="metrics"):
                     # Compute value function error if available
                     if value_functions is not None and state_dim == 4:
-                        value_l2_error, batch_points = self.compute_value_function_l2_error(
+                        l2_means, l2_stds, batch_points = self.compute_value_function_l2_error(
                             predicted_points, target_points, value_functions, dataset_with_vf
                         )
-                        value_l2_errors.append(value_l2_error)
+                        all_l2_means.extend(l2_means)
+                        all_l2_stds.extend(l2_stds)
                         total_points_evaluated += batch_points
                         
                         # Log batch metrics to wandb
                         if self.wandb_logging:
                             wandb.log({
-                                f"{model_type.lower()}/{self.current_split}/batch_value_l2_error": value_l2_error,
+                                f"{model_type.lower()}/{self.current_split}/batch_value_l2_error_mean": np.mean(l2_means),
+                                f"{model_type.lower()}/{self.current_split}/batch_value_l2_error_std": np.std(l2_stds),
                                 f"{model_type.lower()}/{self.current_split}/batch_idx": batch_idx,
                                 f"{model_type.lower()}/{self.current_split}/total_points": total_points_evaluated
                             })
                 
                 # Store samples for visualization if needed
                 if self.vis_sample_count < self.max_vis_samples:
-                    vis_samples.append((predicted_points, target_points, env_batch, value_functions))
+                    vis_samples.append((predicted_points, target_points, env_batch, value_functions, l2_means, l2_stds))
                 
                 batch_count += 1
                 
@@ -657,12 +564,17 @@ class ModelEvaluator:
         # Generate visualizations after evaluation
         if self.save_visualizations and vis_samples:
             logger.info("Generating visualizations...")
-            for batch_idx, (predicted_points, target_points, env_batch, value_functions) in enumerate(vis_samples):
+            for batch_idx, (predicted_points, target_points, env_batch, value_functions, l2_means, l2_stds) in enumerate(vis_samples):
                 if self.vis_sample_count >= self.max_vis_samples:
                     break
+                # Use the first sample in the batch for visualization
+                sample_l2_mean = l2_means[0] if l2_means else None
+                sample_l2_std = l2_stds[0] if l2_stds else None
+                l2_title = f"L2 Error: {sample_l2_mean:.6f} (std: {sample_l2_std:.6f})" if sample_l2_mean is not None else None
                 self.save_evaluation_visualizations(
                     predicted_points, target_points, env_batch, 
-                    value_functions, model_info, batch_idx, vis_dir, dataset_with_vf
+                    value_functions, model_info, batch_idx, output_dir, dataset_with_vf,
+                    l2_title=l2_title
                 )
         
         # Compute final metrics
@@ -672,32 +584,36 @@ class ModelEvaluator:
             'config': model_info['config'],
         }
         
-        if value_l2_errors:
+        if all_l2_means:
             results.update({
-                'value_l2_error_mean': np.mean(value_l2_errors),
-                'value_l2_error_std': np.std(value_l2_errors),
-                'num_value_samples': total_points_evaluated
+                'mean_l2_error_across_pointclouds': np.mean(all_l2_means),
+                'std_l2_error_across_pointclouds': np.std(all_l2_means),
+                'num_pointclouds': len(all_l2_means),
+                'num_value_samples': total_points_evaluated,
+                'per_pointcloud_l2_means': all_l2_means,
+                'per_pointcloud_l2_stds': all_l2_stds,
             })
             
             # Log final metrics to wandb
             if self.wandb_logging:
                 base_path = f"{model_type.lower()}/{self.current_split}"
                 wandb.log({
-                    f"{base_path}/final_metrics/value_l2_error_mean": results['value_l2_error_mean'],
-                    f"{base_path}/final_metrics/value_l2_error_std": results['value_l2_error_std'],
+                    f"{base_path}/final_metrics/mean_l2_error_across_pointclouds": results['mean_l2_error_across_pointclouds'],
+                    f"{base_path}/final_metrics/std_l2_error_across_pointclouds": results['std_l2_error_across_pointclouds'],
+                    f"{base_path}/final_metrics/num_pointclouds": results['num_pointclouds'],
                     f"{base_path}/final_metrics/num_value_samples": results['num_value_samples']
                 })
                 
                 # Create and log summary table
                 summary_data = [
                     [model_type, state_dim, self.current_split, 
-                     results['value_l2_error_mean'], 
-                     results['value_l2_error_std'], 
-                     results['num_value_samples']]
+                     results['mean_l2_error_across_pointclouds'], 
+                     results['std_l2_error_across_pointclouds'], 
+                     results['num_pointclouds']]
                 ]
                 summary_table = wandb.Table(
                     data=summary_data, 
-                    columns=["Model Type", "State Dim", "Split", "Value L2 Error Mean", "Value L2 Error Std", "Samples"]
+                    columns=["Model Type", "State Dim", "Split", "Mean L2 Error", "Std L2 Error", "Pointclouds"]
                 )
                 wandb.log({f"{base_path}/evaluation_summary": summary_table})
         
@@ -728,15 +644,15 @@ def main():
                       help='Number of data loader workers')
     parser.add_argument('--no_visualizations', action='store_true',
                       help='Disable saving visualizations')
-    parser.add_argument('--max_vis_samples', type=int, default=10,
+    parser.add_argument('--max_vis_samples', type=int, default=4,
                       help='Maximum number of samples to visualize per model')
-    parser.add_argument('--splits', nargs='*', default=['train', 'val', 'test'],
+    parser.add_argument('--splits', nargs='*', default=['test'],
                       help='Dataset splits to evaluate on')
     parser.add_argument('--seed', type=int, default=42,
                       help='Random seed for reproducibility')
     
     # Wandb arguments
-    parser.add_argument('--wandb_logging', action='store_true',
+    parser.add_argument('--wandb_logging', action='store_true', default=True,
                       help='Enable wandb logging for plots and metrics')
     parser.add_argument('--wandb_project', type=str, default='brt-model-evaluation',
                       help='Wandb project name for logging')
@@ -898,7 +814,7 @@ def main():
                 logger.info(f"Results for {checkpoint_name} on {split} split:")
                 logger.info(f"  Model Type: {results['model_type']}")
                 logger.info(f"  State Dim: {results['state_dim']}")
-                logger.info(f"  Value L2 Error: {results['value_l2_error_mean']:.6f} ± {results['value_l2_error_std']:.6f}")
+                logger.info(f"  Mean L2 Error: {results['mean_l2_error_across_pointclouds']:.6f} ± {results['std_l2_error_across_pointclouds']:.6f}")
                 
                 all_results.append(results)
                 
@@ -906,7 +822,7 @@ def main():
                 summary = f"Model: {results['model_type']} ({results['state_dim']}D)\n"
                 summary += f"Split: {split}\n"
                 summary += f"Checkpoint: {checkpoint_name}\n"
-                summary += f"Value L2 Error: {results['value_l2_error_mean']:.6f} ± {results['value_l2_error_std']:.6f}\n"
+                summary += f"Mean L2 Error: {results['mean_l2_error_across_pointclouds']:.6f} ± {results['std_l2_error_across_pointclouds']:.6f}\n"
                 summary += f"Samples evaluated: {results['num_value_samples']}\n"
                 summary += "\n"
                 results_summary.append(summary)
@@ -922,48 +838,60 @@ def main():
     with open(results_file, 'w') as f:
         json.dump(all_results, f, indent=2)
     
-    # Write detailed results to text file
+    # Write detailed results to text file with both per-pointcloud and whole-split statistics
     results_text_file = os.path.join(args.output_dir, 'evaluation_results.txt')
     with open(results_text_file, 'w') as f:
-        f.write(f"Evaluation Results\n")
-        f.write(f"==================\n")
+        f.write(f"BRT Model Evaluation Results\n")
+        f.write(f"============================\n")
         f.write(f"Timestamp: {timestamp}\n")
         f.write(f"Dataset: {args.dataset_dir}\n")
-        f.write(f"Total samples evaluated: {len(dataset)}\n")
-        f.write(f"Seed: {args.seed}\n\n")
+        f.write(f"Seed: {args.seed}\n")
+        f.write(f"Batch size: {args.batch_size}\n")
+        f.write(f"Device: {args.device}\n")
+        f.write(f"Max visualizations per model: {args.max_vis_samples}\n\n")
         
         # Write summary for each model and split
+        f.write("SUMMARY\n")
+        f.write("="*50 + "\n")
         for summary in results_summary:
             f.write(summary)
         
         # Write detailed statistics
-        f.write("="*50 + "\n")
-        f.write("DETAILED STATISTICS\n")
-        f.write("="*50 + "\n\n")
+        f.write("="*70 + "\n")
+        f.write("DETAILED STATISTICS (PER-POINTCLOUD AND WHOLE-SPLIT)\n")
+        f.write("="*70 + "\n\n")
         
         for result in all_results:
             f.write(f"Model: {result['model_type']} ({result['state_dim']}D)\n")
             f.write(f"Split: {result['split']}\n")
             f.write(f"Checkpoint: {result['checkpoint_name']}\n")
-            f.write("-" * 40 + "\n")
+            f.write("-" * 50 + "\n")
             
-            # Value Function Statistics
-            if 'value_l2_error_mean' in result:
-                f.write(f"Value Function L2 Error:\n")
-                f.write(f"  Mean: {result['value_l2_error_mean']:.8f}\n")
-                f.write(f"  Std:  {result['value_l2_error_std']:.8f}\n")
-                f.write(f"  Total Points Evaluated: {result['num_value_samples']:,}\n")
-                f.write(f"  Per-Point Statistics:\n")
-                f.write(f"    - Average error per point: {result['value_l2_error_mean']:.8f}\n")
-                f.write(f"    - Error range: [{result['value_l2_error_mean'] - result['value_l2_error_std']:.8f}, {result['value_l2_error_mean'] + result['value_l2_error_std']:.8f}]\n")
-                f.write(f"    - Relative error: {(result['value_l2_error_mean'] / result['value_l2_error_std']):.2f}%\n")
+            # Whole Split Statistics
+            f.write(f"WHOLE SPLIT STATISTICS:\n")
+            if 'mean_l2_error_across_pointclouds' in result:
+                f.write(f"  Mean L2 Error (across all pointclouds): {result['mean_l2_error_across_pointclouds']:.8f}\n")
+                f.write(f"  Std L2 Error (across all pointclouds):  {result['std_l2_error_across_pointclouds']:.8f}\n")
+                f.write(f"  Number of pointclouds evaluated:       {result['num_pointclouds']}\n")
+                f.write(f"  Total value function points sampled:   {result['num_value_samples']:,}\n")
             
-            f.write(f"\nConfiguration:\n")
+            # Per-Pointcloud Statistics (show first 20)
+            f.write(f"\nPER-POINTCLOUD STATISTICS (first 20 samples):\n")
+            if 'per_pointcloud_l2_means' in result:
+                per_pc_means = result['per_pointcloud_l2_means'][:20]
+                per_pc_stds = result['per_pointcloud_l2_stds'][:20]
+                f.write(f"  Pointcloud L2 means: {[f'{v:.6f}' for v in per_pc_means]}\n")
+                f.write(f"  Pointcloud L2 stds:  {[f'{v:.6f}' for v in per_pc_stds]}\n")
+                
+                if len(result['per_pointcloud_l2_means']) > 20:
+                    f.write(f"  ... (showing first 20 of {len(result['per_pointcloud_l2_means'])} total pointclouds)\n")
+            
+            f.write(f"\nModel Configuration:\n")
             for key, value in result.get('config', {}).items():
                 f.write(f"  {key}: {value}\n")
             f.write(f"\n")
     
-    # Log final comparison results to wandb if enabled
+    # Save all results and plots as wandb artifacts if logging enabled
     if args.wandb_logging and all_results:
         # Create comparison table
         comparison_data = []
@@ -973,22 +901,40 @@ def main():
                 result['model_type'],
                 result['state_dim'],
                 result['split'],
-                result['value_l2_error_mean'],
-                result['value_l2_error_std'],
+                result['mean_l2_error_across_pointclouds'],
+                result['std_l2_error_across_pointclouds'],
                 result['num_value_samples']
             ])
         
         comparison_table = wandb.Table(
             data=comparison_data,
-            columns=["Checkpoint", "Model Type", "State Dim", "Split", "Value L2 Mean", "Value L2 Std", "Samples"]
+            columns=["Checkpoint", "Model Type", "State Dim", "Split", "Mean L2 Error", "Std L2 Error", "Samples"]
         )
         wandb.log({"evaluation_comparison": comparison_table})
         
-        # Log result files as artifacts
+        # Save result files as wandb artifacts
+        artifact = wandb.Artifact(
+            name=f"evaluation_results_{timestamp}",
+            type="evaluation_results",
+            description=f"Model evaluation results and statistics for {len(checkpoints_to_evaluate)} models"
+        )
+        
+        # Add result files to artifact
         if os.path.exists(results_file):
-            wandb.save(results_file)
+            artifact.add_file(results_file, name="evaluation_results.json")
         if os.path.exists(results_text_file):
-            wandb.save(results_text_file)
+            artifact.add_file(results_text_file, name="evaluation_results.txt")
+            
+        # Add all visualization directories to artifact
+        for checkpoint_name, _ in checkpoints_to_evaluate:
+            for split in args.splits:
+                split_output_dir = os.path.join(args.output_dir, f"{checkpoint_name}_{split}")
+                if os.path.exists(split_output_dir):
+                    artifact.add_dir(split_output_dir, name=f"visualizations/{checkpoint_name}_{split}")
+        
+        # Log the artifact
+        wandb.log_artifact(artifact)
+        logger.info(f"Saved evaluation results and visualizations as wandb artifact: evaluation_results_{timestamp}")
     
     logger.info(f"Evaluation complete! Results saved to {args.output_dir}")
     logger.info(f"  JSON results: {results_file}")
@@ -1003,6 +949,7 @@ def main():
     print(f"Results saved to: {args.output_dir}")
     if args.wandb_logging:
         print(f"Wandb project: {args.wandb_project}")
+        print(f"Wandb artifact: evaluation_results_{timestamp}")
     print()
     
     for summary in results_summary:
