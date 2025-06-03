@@ -368,7 +368,8 @@ if __name__ == "__main__":
         torch.cuda.manual_seed_all(args.seed)
     
     # Create dataset
-    dataset = BRTDataset(args.dataset_dir, split="train", is_3d=args.3d)
+    is_3d = getattr(args, '3d', False)  # Safely get the 3d flag
+    dataset = BRTDataset(args.dataset_dir, split="train", is_3d=is_3d)
     
     # Get dimensions from dataset
     STATE_DIM = dataset.state_dim
@@ -385,7 +386,7 @@ if __name__ == "__main__":
         beta_end=args.beta_end,
         device=args.device,
         null_conditioning_prob=args.null_conditioning_prob,
-        is_3d=args.3d
+        is_3d=is_3d
     ).to(args.device)
     
     print(f"Model initialized on {args.device}")
@@ -395,7 +396,7 @@ if __name__ == "__main__":
     print(f"Learning rate: {args.lr} -> {args.lr_min} (cosine annealing warm restarts, T_0={args.lr_restart_period}, T_mult={args.lr_restart_mult})")
     print(f"Sampling every {args.sample_every} epochs")
     print(f"Classifier-free guidance: null_conditioning_prob={args.null_conditioning_prob}, guidance_scale={args.guidance_scale}")
-    print(f"3D mode: {args.3d}")
+    print(f"3D mode: {is_3d}")
     
     # Train model
     losses, val_losses, vis_samples, val_vis_samples = train_model(
