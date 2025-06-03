@@ -46,8 +46,9 @@ def main():
     print(f"Loaded checkpoint from {checkpoint_path}")
 
     sample_idx = 23
-    point_cloud, env_grid = dataset[sample_idx]
-    env_grid = env_grid.unsqueeze(0).to(model.device)  # Add batch dimension
+    point_cloud, env_grid, *_ = dataset[sample_idx]  # Use wildcard to handle extra return values
+    point_cloud = point_cloud.to(model.device)
+    env_grid = env_grid.to(model.device)
     
     # Start from pure noise
     x_t = torch.randn(1, model.num_points, model.state_dim).to(model.device)
