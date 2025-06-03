@@ -22,6 +22,7 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 import wandb
 import tempfile
 import shutil
+import time
 
 # Add project modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -557,77 +558,66 @@ class ModelEvaluator:
         # Create visualization directory
         vis_dir = os.path.join(output_dir, f"visualizations_{model_type}_{state_dim}D")
         
+        batch_count = 0
+        
         for batch_idx, batch_data in enumerate(tqdm(test_loader, desc="Evaluating")):
-            if len(batch_data) == 3:
-                target_points, env_batch, value_functions = batch_data
-            else:
-                target_points, env_batch = batch_data
-                value_functions = None
-            
-            env_batch = env_batch.to(self.device)
-            target_points = target_points.to(self.device)
-            
-            # Generate predictions
-            if state_dim == 3:
-                # 3D model: generate 3D points, evaluate with Chamfer distance only
-                predicted_points = self.generate_samples(model, model_info, env_batch, target_state_dim=3)
+            with logger.contextualize(batch=batch_idx):
+                # Time data loading
+                with logger.contextualize(operation="data_loading"):
+                    if len(batch_data) == 3:
+                        target_points, env_batch, value_functions = batch_data
+                    else:
+                        target_points, env_batch = batch_data
+                        value_functions = None
+                    
+                    env_batch = env_batch.to(self.device)
+                    target_points = target_points.to(self.device)
                 
-                # Compute Chamfer distance on 3D coordinates
-                chamfer_dist = self.compute_chamfer_distance(
-                    predicted_points, target_points[:, :, :3]
-                )
-                chamfer_distances.append(chamfer_dist)
+                # Time model forward pass
+                with logger.contextualize(operation="model_forward"):
+                    if state_dim == 3:
+                        # 3D model: generate 3D points, evaluate with Chamfer distance only
+                        predicted_points = self.generate_samples(model, model_info, env_batch, target_state_dim=3)
+                        
+                        # Compute Chamfer distance on 3D coordinates
+                        with logger.contextualize(operation="chamfer_distance"):
+                            chamfer_dist = self.compute_chamfer_distance(
+                                predicted_points, target_points[:, :, :3]
+                            )
+                            chamfer_distances.append(chamfer_dist)
+                        
+                    elif state_dim == 4:
+                        # 4D model: generate 4D points, evaluate with both metrics
+                        predicted_points = self.generate_samples(model, model_info, env_batch, target_state_dim=4)
+                        
+                        # Compute Chamfer distance on 3D coordinates
+                        with logger.contextualize(operation="chamfer_distance"):
+                            chamfer_dist = self.compute_chamfer_distance(
+                                predicted_points[:, :, :3], target_points[:, :, :3]
+                            )
+                            chamfer_distances.append(chamfer_dist)
+                        
+                        # Compute value function L2 error if value functions available
+                        if value_functions is not None:
+                            with logger.contextualize(operation="value_function"):
+                                value_l2_error = self.compute_value_function_l2_error(
+                                    predicted_points, target_points, value_functions, dataset_with_vf
+                                )
+                                value_l2_errors.append(value_l2_error)
                 
-                # Log batch-level metrics to wandb if enabled
-                if self.wandb_logging:
-                    base_path = f"{model_type.lower()}/{self.current_split}"
-                    wandb.log({
-                        f"{base_path}/batch_metrics/chamfer_distance": chamfer_dist,
-                        f"{base_path}/batch_metrics/batch_idx": batch_idx
-                    })
-                
-                # Save visualization if we haven't reached the limit
+                # Time visualization
                 if self.vis_sample_count < self.max_vis_samples:
-                    self.save_evaluation_visualizations(
-                        predicted_points, target_points, env_batch, 
-                        value_functions, model_info, batch_idx, vis_dir, dataset_with_vf
-                    )
+                    with logger.contextualize(operation="visualization"):
+                        self.save_evaluation_visualizations(
+                            predicted_points, target_points, env_batch, 
+                            value_functions, model_info, batch_idx, vis_dir, dataset_with_vf
+                        )
                 
-            elif state_dim == 4:
-                # 4D model: generate 4D points, evaluate with both metrics
-                predicted_points = self.generate_samples(model, model_info, env_batch, target_state_dim=4)
+                batch_count += 1
                 
-                # Compute Chamfer distance on 3D coordinates
-                chamfer_dist = self.compute_chamfer_distance(
-                    predicted_points[:, :, :3], target_points[:, :, :3]
-                )
-                chamfer_distances.append(chamfer_dist)
-                
-                # Compute value function L2 error if value functions available
-                value_l2_error = None
-                if value_functions is not None:
-                    value_l2_error = self.compute_value_function_l2_error(
-                        predicted_points, target_points, value_functions, dataset_with_vf
-                    )
-                    value_l2_errors.append(value_l2_error)
-                
-                # Log batch-level metrics to wandb if enabled
-                if self.wandb_logging:
-                    base_path = f"{model_type.lower()}/{self.current_split}"
-                    log_dict = {
-                        f"{base_path}/batch_metrics/chamfer_distance": chamfer_dist,
-                        f"{base_path}/batch_metrics/batch_idx": batch_idx
-                    }
-                    if value_l2_error is not None:
-                        log_dict[f"{base_path}/batch_metrics/value_l2_error"] = value_l2_error
-                    wandb.log(log_dict)
-                
-                # Save visualization if we haven't reached the limit
-                if self.vis_sample_count < self.max_vis_samples:
-                    self.save_evaluation_visualizations(
-                        predicted_points, target_points, env_batch, 
-                        value_functions, model_info, batch_idx, vis_dir, dataset_with_vf
-                    )
+                # Log timing every 10 batches
+                if batch_count % 10 == 0:
+                    logger.info(f"Completed {batch_count} batches")
         
         # Compute final metrics
         results = {
