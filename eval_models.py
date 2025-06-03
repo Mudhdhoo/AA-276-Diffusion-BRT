@@ -566,7 +566,7 @@ class ModelEvaluator:
                 f"{base_path}/model_info/config": model_info.get('config', {})
             })
         
-        chamfer_distances = []
+        # chamfer_distances = []  # Commented out Chamfer distance
         value_l2_errors = []
         
         # Create visualization directory
@@ -580,73 +580,33 @@ class ModelEvaluator:
         for batch_idx, batch_data in enumerate(tqdm(test_loader, desc="Evaluating")):
             logger.debug(f"Processing batch {batch_idx}")
             with logger.contextualize(batch=batch_idx):
-                # Time data loading
+                # Load and move data to GPU
                 with logger.contextualize(operation="data_loading"):
-                    logger.debug("Loading batch data")
                     if len(batch_data) == 3:
-                        target_points, env_batch, value_functions = batch_data
-                        logger.debug(f"Batch shapes - target: {target_points.shape}, env: {env_batch.shape}, vf: {value_functions.shape}")
+                        target_points, env_batch, value_functions = [d.to(self.device) for d in batch_data]
                     else:
-                        target_points, env_batch = batch_data
+                        target_points, env_batch = [d.to(self.device) for d in batch_data]
                         value_functions = None
-                        logger.debug(f"Batch shapes - target: {target_points.shape}, env: {env_batch.shape}")
-                    
-                    logger.debug("Moving data to device")
-                    env_batch = env_batch.to(self.device)
-                    target_points = target_points.to(self.device)
-                    if value_functions is not None:
-                        value_functions = value_functions.to(self.device)
-                    logger.debug(f"Data device - env: {env_batch.device}, target: {target_points.device}, vf: {value_functions.device if value_functions is not None else 'None'}")
-                    logger.debug("Data loaded and moved to device")
-                    
-                    # Log memory usage after moving data
-                    if torch.cuda.is_available():
-                        logger.debug(f"GPU memory after data load - allocated: {torch.cuda.memory_allocated() / 1024**2:.2f} MB, cached: {torch.cuda.memory_reserved() / 1024**2:.2f} MB")
-                        vf_size = value_functions.element_size() * value_functions.nelement() / 1024**2 if value_functions is not None else 0
-                        logger.debug(f"Data sizes - env: {env_batch.element_size() * env_batch.nelement() / 1024**2:.2f} MB, "
-                                   f"target: {target_points.element_size() * target_points.nelement() / 1024**2:.2f} MB, "
-                                   f"vf: {vf_size:.2f} MB")
                 
-                # Time model forward pass
+                # Generate predictions
                 with logger.contextualize(operation="model_forward"):
-                    logger.debug("Starting model forward pass")
-                    if state_dim == 3:
-                        # 3D model: generate 3D points, evaluate with Chamfer distance only
-                        predicted_points = self.generate_samples(model, model_info, env_batch, target_state_dim=3)
-                        logger.debug(f"Generated 3D predictions with shape {predicted_points.shape}")
+                    predicted_points = self.generate_samples(model, model_info, env_batch, target_state_dim=state_dim)
+                
+                # Compute metrics
+                with logger.contextualize(operation="metrics"):
+                    # Compute value function error if available
+                    if value_functions is not None and state_dim == 4:
+                        value_l2_error = self.compute_value_function_l2_error(
+                            predicted_points, target_points, value_functions, dataset_with_vf
+                        )
+                        value_l2_errors.append(value_l2_error)
                         
-                        # Compute Chamfer distance on 3D coordinates
-                        with logger.contextualize(operation="chamfer_distance"):
-                            logger.debug("Computing Chamfer distance")
-                            chamfer_dist = self.compute_chamfer_distance(
-                                predicted_points, target_points[:, :, :3]
-                            )
-                            chamfer_distances.append(chamfer_dist)
-                            logger.debug(f"Chamfer distance computed: {chamfer_dist:.6f}")
-                        
-                    elif state_dim == 4:
-                        # 4D model: generate 4D points, evaluate with both metrics
-                        predicted_points = self.generate_samples(model, model_info, env_batch, target_state_dim=4)
-                        logger.debug(f"Generated 4D predictions with shape {predicted_points.shape}")
-                        
-                        # Compute Chamfer distance on 3D coordinates
-                        with logger.contextualize(operation="chamfer_distance"):
-                            logger.debug("Computing Chamfer distance")
-                            chamfer_dist = self.compute_chamfer_distance(
-                                predicted_points[:, :, :3], target_points[:, :, :3]
-                            )
-                            chamfer_distances.append(chamfer_dist)
-                            logger.debug(f"Chamfer distance computed: {chamfer_dist:.6f}")
-                        
-                        # Compute value function L2 error if value functions available
-                        if value_functions is not None:
-                            with logger.contextualize(operation="value_function"):
-                                logger.debug("Computing value function L2 error")
-                                value_l2_error = self.compute_value_function_l2_error(
-                                    predicted_points, target_points, value_functions, dataset_with_vf
-                                )
-                                value_l2_errors.append(value_l2_error)
-                                logger.debug(f"Value function L2 error computed: {value_l2_error:.6f}")
+                        # Log batch metrics to wandb
+                        if self.wandb_logging:
+                            wandb.log({
+                                f"{model_type.lower()}/{self.current_split}/batch_value_l2_error": value_l2_error,
+                                f"{model_type.lower()}/{self.current_split}/batch_idx": batch_idx
+                            })
                 
                 # Store samples for visualization if needed
                 if self.vis_sample_count < self.max_vis_samples:
@@ -674,9 +634,9 @@ class ModelEvaluator:
             'model_type': model_type,
             'state_dim': state_dim,
             'config': model_info['config'],
-            'chamfer_distance_mean': np.mean(chamfer_distances),
-            'chamfer_distance_std': np.std(chamfer_distances),
-            'num_chamfer_samples': len(chamfer_distances)
+            # 'chamfer_distance_mean': np.mean(chamfer_distances),  # Commented out Chamfer distance
+            # 'chamfer_distance_std': np.std(chamfer_distances),   # Commented out Chamfer distance
+            # 'num_chamfer_samples': len(chamfer_distances)        # Commented out Chamfer distance
         }
         
         if value_l2_errors:
@@ -685,33 +645,28 @@ class ModelEvaluator:
                 'value_l2_error_std': np.std(value_l2_errors),
                 'num_value_samples': len(value_l2_errors)
             })
-        
-        # Log final metrics to wandb if enabled
-        if self.wandb_logging:
-            base_path = f"{model_type.lower()}/{self.current_split}"
-            final_metrics = {
-                f"{base_path}/final_metrics/chamfer_distance_mean": results['chamfer_distance_mean'],
-                f"{base_path}/final_metrics/chamfer_distance_std": results['chamfer_distance_std'],
-                f"{base_path}/final_metrics/num_chamfer_samples": results['num_chamfer_samples']
-            }
-            if 'value_l2_error_mean' in results:
-                final_metrics.update({
+            
+            # Log final metrics to wandb
+            if self.wandb_logging:
+                base_path = f"{model_type.lower()}/{self.current_split}"
+                wandb.log({
                     f"{base_path}/final_metrics/value_l2_error_mean": results['value_l2_error_mean'],
                     f"{base_path}/final_metrics/value_l2_error_std": results['value_l2_error_std'],
                     f"{base_path}/final_metrics/num_value_samples": results['num_value_samples']
                 })
-            wandb.log(final_metrics)
-            
-            # Create and log summary table
-            summary_data = [
-                [model_type, state_dim, self.current_split, results['chamfer_distance_mean'], 
-                 results.get('value_l2_error_mean', 'N/A'), results['num_chamfer_samples']]
-            ]
-            summary_table = wandb.Table(
-                data=summary_data, 
-                columns=["Model Type", "State Dim", "Split", "Chamfer Distance", "Value L2 Error", "Samples"]
-            )
-            wandb.log({f"{base_path}/evaluation_summary": summary_table})
+                
+                # Create and log summary table
+                summary_data = [
+                    [model_type, state_dim, self.current_split, 
+                     results['value_l2_error_mean'], 
+                     results['value_l2_error_std'], 
+                     results['num_value_samples']]
+                ]
+                summary_table = wandb.Table(
+                    data=summary_data, 
+                    columns=["Model Type", "State Dim", "Split", "Value L2 Error Mean", "Value L2 Error Std", "Samples"]
+                )
+                wandb.log({f"{base_path}/evaluation_summary": summary_table})
         
         return results
 
@@ -910,9 +865,7 @@ def main():
                 logger.info(f"Results for {checkpoint_name} on {split} split:")
                 logger.info(f"  Model Type: {results['model_type']}")
                 logger.info(f"  State Dim: {results['state_dim']}")
-                logger.info(f"  Chamfer Distance: {results['chamfer_distance_mean']:.6f} ± {results['chamfer_distance_std']:.6f}")
-                if 'value_l2_error_mean' in results:
-                    logger.info(f"  Value L2 Error: {results['value_l2_error_mean']:.6f} ± {results['value_l2_error_std']:.6f}")
+                logger.info(f"  Value L2 Error: {results['value_l2_error_mean']:.6f} ± {results['value_l2_error_std']:.6f}")
                 
                 all_results.append(results)
                 
@@ -920,10 +873,8 @@ def main():
                 summary = f"Model: {results['model_type']} ({results['state_dim']}D)\n"
                 summary += f"Split: {split}\n"
                 summary += f"Checkpoint: {checkpoint_name}\n"
-                summary += f"Chamfer Distance: {results['chamfer_distance_mean']:.6f} ± {results['chamfer_distance_std']:.6f}\n"
-                if 'value_l2_error_mean' in results:
-                    summary += f"Value L2 Error: {results['value_l2_error_mean']:.6f} ± {results['value_l2_error_std']:.6f}\n"
-                summary += f"Samples evaluated: {results['num_chamfer_samples']}\n"
+                summary += f"Value L2 Error: {results['value_l2_error_mean']:.6f} ± {results['value_l2_error_std']:.6f}\n"
+                summary += f"Samples evaluated: {results['num_value_samples']}\n"
                 summary += "\n"
                 results_summary.append(summary)
                 
@@ -962,16 +913,10 @@ def main():
             f.write(f"Split: {result['split']}\n")
             f.write(f"Checkpoint: {result['checkpoint_name']}\n")
             f.write("-" * 40 + "\n")
-            f.write(f"Chamfer Distance:\n")
-            f.write(f"  Mean: {result['chamfer_distance_mean']:.8f}\n")
-            f.write(f"  Std:  {result['chamfer_distance_std']:.8f}\n")
-            f.write(f"  Samples: {result['num_chamfer_samples']}\n")
-            
-            if 'value_l2_error_mean' in result:
-                f.write(f"Value Function L2 Error:\n")
-                f.write(f"  Mean: {result['value_l2_error_mean']:.8f}\n")
-                f.write(f"  Std:  {result['value_l2_error_std']:.8f}\n")
-                f.write(f"  Samples: {result['num_value_samples']}\n")
+            f.write(f"Value Function L2 Error:\n")
+            f.write(f"  Mean: {result['value_l2_error_mean']:.8f}\n")
+            f.write(f"  Std:  {result['value_l2_error_std']:.8f}\n")
+            f.write(f"  Samples: {result['num_value_samples']}\n")
             
             f.write(f"Configuration:\n")
             for key, value in result.get('config', {}).items():
@@ -988,17 +933,14 @@ def main():
                 result['model_type'],
                 result['state_dim'],
                 result['split'],
-                result['chamfer_distance_mean'],
-                result['chamfer_distance_std'],
-                result.get('value_l2_error_mean', 'N/A'),
-                result.get('value_l2_error_std', 'N/A'),
-                result['num_chamfer_samples']
+                result['value_l2_error_mean'],
+                result['value_l2_error_std'],
+                result['num_value_samples']
             ])
         
         comparison_table = wandb.Table(
             data=comparison_data,
-            columns=["Checkpoint", "Model Type", "State Dim", "Split", "Chamfer Mean", "Chamfer Std", 
-                    "Value L2 Mean", "Value L2 Std", "Samples"]
+            columns=["Checkpoint", "Model Type", "State Dim", "Split", "Value L2 Mean", "Value L2 Std", "Samples"]
         )
         wandb.log({"evaluation_comparison": comparison_table})
         
@@ -1007,13 +949,10 @@ def main():
             wandb.save(results_file)
         if os.path.exists(results_text_file):
             wandb.save(results_text_file)
-        if os.path.exists(info_file):
-            wandb.save(info_file)
     
     logger.info(f"Evaluation complete! Results saved to {args.output_dir}")
     logger.info(f"  JSON results: {results_file}")
     logger.info(f"  Text results: {results_text_file}")
-    logger.info(f"  Info file: {info_file}")
     
     # Print summary to console
     print("\n" + "="*80)
