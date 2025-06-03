@@ -592,7 +592,9 @@ class ModelEvaluator:
                     logger.debug("Moving data to device")
                     env_batch = env_batch.to(self.device)
                     target_points = target_points.to(self.device)
-                    logger.debug(f"Data device - env: {env_batch.device}, target: {target_points.device}")
+                    if value_functions is not None:
+                        value_functions = value_functions.to(self.device)
+                    logger.debug(f"Data device - env: {env_batch.device}, target: {target_points.device}, vf: {value_functions.device if value_functions is not None else 'None'}")
                     logger.debug("Data loaded and moved to device")
                 
                 # Time model forward pass
