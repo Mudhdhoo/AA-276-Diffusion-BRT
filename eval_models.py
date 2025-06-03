@@ -542,6 +542,7 @@ class ModelEvaluator:
         self.current_model_type = model_type
         
         logger.info(f"Evaluating {model_type} model with {state_dim}D output")
+        logger.info(f"DataLoader info: batch_size={test_loader.batch_size}, num_workers={test_loader.num_workers}")
         
         # Log model info to wandb if enabled
         if self.wandb_logging:
@@ -560,58 +561,76 @@ class ModelEvaluator:
         
         batch_count = 0
         
+        logger.info("Starting evaluation loop...")
         for batch_idx, batch_data in enumerate(tqdm(test_loader, desc="Evaluating")):
+            logger.debug(f"Processing batch {batch_idx}")
             with logger.contextualize(batch=batch_idx):
                 # Time data loading
                 with logger.contextualize(operation="data_loading"):
+                    logger.debug("Loading batch data")
                     if len(batch_data) == 3:
                         target_points, env_batch, value_functions = batch_data
+                        logger.debug(f"Batch shapes - target: {target_points.shape}, env: {env_batch.shape}, vf: {value_functions.shape}")
                     else:
                         target_points, env_batch = batch_data
                         value_functions = None
+                        logger.debug(f"Batch shapes - target: {target_points.shape}, env: {env_batch.shape}")
                     
+                    logger.debug("Moving data to device")
                     env_batch = env_batch.to(self.device)
                     target_points = target_points.to(self.device)
+                    logger.debug("Data loaded and moved to device")
                 
                 # Time model forward pass
                 with logger.contextualize(operation="model_forward"):
+                    logger.debug("Starting model forward pass")
                     if state_dim == 3:
                         # 3D model: generate 3D points, evaluate with Chamfer distance only
                         predicted_points = self.generate_samples(model, model_info, env_batch, target_state_dim=3)
+                        logger.debug(f"Generated 3D predictions with shape {predicted_points.shape}")
                         
                         # Compute Chamfer distance on 3D coordinates
                         with logger.contextualize(operation="chamfer_distance"):
+                            logger.debug("Computing Chamfer distance")
                             chamfer_dist = self.compute_chamfer_distance(
                                 predicted_points, target_points[:, :, :3]
                             )
                             chamfer_distances.append(chamfer_dist)
+                            logger.debug(f"Chamfer distance computed: {chamfer_dist:.6f}")
                         
                     elif state_dim == 4:
                         # 4D model: generate 4D points, evaluate with both metrics
                         predicted_points = self.generate_samples(model, model_info, env_batch, target_state_dim=4)
+                        logger.debug(f"Generated 4D predictions with shape {predicted_points.shape}")
                         
                         # Compute Chamfer distance on 3D coordinates
                         with logger.contextualize(operation="chamfer_distance"):
+                            logger.debug("Computing Chamfer distance")
                             chamfer_dist = self.compute_chamfer_distance(
                                 predicted_points[:, :, :3], target_points[:, :, :3]
                             )
                             chamfer_distances.append(chamfer_dist)
+                            logger.debug(f"Chamfer distance computed: {chamfer_dist:.6f}")
                         
                         # Compute value function L2 error if value functions available
                         if value_functions is not None:
                             with logger.contextualize(operation="value_function"):
+                                logger.debug("Computing value function L2 error")
                                 value_l2_error = self.compute_value_function_l2_error(
                                     predicted_points, target_points, value_functions, dataset_with_vf
                                 )
                                 value_l2_errors.append(value_l2_error)
+                                logger.debug(f"Value function L2 error computed: {value_l2_error:.6f}")
                 
                 # Time visualization
                 if self.vis_sample_count < self.max_vis_samples:
                     with logger.contextualize(operation="visualization"):
+                        logger.debug("Generating visualizations")
                         self.save_evaluation_visualizations(
                             predicted_points, target_points, env_batch, 
                             value_functions, model_info, batch_idx, vis_dir, dataset_with_vf
                         )
+                        logger.debug("Visualizations generated")
                 
                 batch_count += 1
                 
