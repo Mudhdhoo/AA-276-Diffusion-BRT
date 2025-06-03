@@ -311,7 +311,7 @@ def visualize_denoising_with_true(points_sequence, true_pc, titles, save_path=No
     else:
         plt.show()
 
-def visualize_detailed_value_function_comparison(true_pc, pred_pc, env_grid, title=None, save_path=None, dataset=None):
+def visualize_detailed_value_function_comparison(true_pc, pred_pc, env_grid, title=None, save_path=None, dataset=None, sample_l2_error=None):
     """
     Create detailed comparison visualization with theta slices showing value function differences.
     
@@ -322,6 +322,7 @@ def visualize_detailed_value_function_comparison(true_pc, pred_pc, env_grid, tit
         title: Plot title
         save_path: Path to save the figure
         dataset: Dataset for denormalization
+        sample_l2_error: Optional, mean L2 error for this sample (float)
     """
     # Denormalize points if dataset provided
     if dataset is not None:
@@ -501,8 +502,13 @@ Predicted BRT: {len(pred_pc):,} points
             ax_slice.set_ylabel('Y Position')
             ax_slice.grid(True, alpha=0.3)
     
-    if title:
+    # Set the figure title, including L2 error if provided
+    if title is not None and sample_l2_error is not None:
+        fig.suptitle(f"{title}\nSample L2 Error: {sample_l2_error:.6f}", fontsize=16, fontweight='bold', y=0.98)
+    elif title is not None:
         fig.suptitle(title, fontsize=16, fontweight='bold', y=0.98)
+    elif sample_l2_error is not None:
+        fig.suptitle(f"Sample L2 Error: {sample_l2_error:.6f}", fontsize=16, fontweight='bold', y=0.98)
     
     plt.tight_layout()
     if save_path:
