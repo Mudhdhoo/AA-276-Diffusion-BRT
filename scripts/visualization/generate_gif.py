@@ -176,9 +176,11 @@ def generate_denoising_gif(model, dataset, sample_idx, num_frames=50, save_dir="
     
     # Save animation
     os.makedirs(save_dir, exist_ok=True)
-    anim.save(os.path.join(save_dir, f'{sample_idx}.gif'), writer=PillowWriter(fps=10))
+    gif_path = os.path.join(save_dir, f'{sample_idx}.gif')
+    anim.save(gif_path, writer=PillowWriter(fps=10))
     plt.close()
-    logger.info(f"Saved GIF to {os.path.join(save_dir, f'{sample_idx}.gif')}")
+    logger.info(f"Saved GIF to {gif_path}")
+    return gif_path
 
 def main():
     # Set device
