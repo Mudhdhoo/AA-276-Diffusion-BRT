@@ -572,6 +572,8 @@ class ModelEvaluator:
         # Create visualization directory
         vis_dir = os.path.join(output_dir, f"visualizations_{model_type}_{state_dim}D")
         
+        # Store samples for visualization
+        vis_samples = []
         batch_count = 0
         
         logger.info("Starting evaluation loop...")
@@ -646,21 +648,26 @@ class ModelEvaluator:
                                 value_l2_errors.append(value_l2_error)
                                 logger.debug(f"Value function L2 error computed: {value_l2_error:.6f}")
                 
-                # Time visualization
+                # Store samples for visualization if needed
                 if self.vis_sample_count < self.max_vis_samples:
-                    with logger.contextualize(operation="visualization"):
-                        logger.debug("Generating visualizations")
-                        self.save_evaluation_visualizations(
-                            predicted_points, target_points, env_batch, 
-                            value_functions, model_info, batch_idx, vis_dir, dataset_with_vf
-                        )
-                        logger.debug("Visualizations generated")
+                    vis_samples.append((predicted_points, target_points, env_batch, value_functions))
                 
                 batch_count += 1
                 
                 # Log timing every 10 batches
                 if batch_count % 10 == 0:
                     logger.info(f"Completed {batch_count} batches")
+        
+        # Generate visualizations after evaluation
+        if self.save_visualizations and vis_samples:
+            logger.info("Generating visualizations...")
+            for batch_idx, (predicted_points, target_points, env_batch, value_functions) in enumerate(vis_samples):
+                if self.vis_sample_count >= self.max_vis_samples:
+                    break
+                self.save_evaluation_visualizations(
+                    predicted_points, target_points, env_batch, 
+                    value_functions, model_info, batch_idx, vis_dir, dataset_with_vf
+                )
         
         # Compute final metrics
         results = {
@@ -723,7 +730,7 @@ def main():
     parser.add_argument('--diffusion_artifact', type=str,
                       default=DEFAULT_ARTIFACTS['diffusion'], 
                       help='Wandb artifact path for Diffusion model')
-    parser.add_argument('--batch_size', type=int, default=8,
+    parser.add_argument('--batch_size', type=int, default=1024,
                       help='Evaluation batch size')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                       help='Device to use for evaluation')
