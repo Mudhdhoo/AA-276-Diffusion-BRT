@@ -596,6 +596,14 @@ class ModelEvaluator:
                         value_functions = value_functions.to(self.device)
                     logger.debug(f"Data device - env: {env_batch.device}, target: {target_points.device}, vf: {value_functions.device if value_functions is not None else 'None'}")
                     logger.debug("Data loaded and moved to device")
+                    
+                    # Log memory usage after moving data
+                    if torch.cuda.is_available():
+                        logger.debug(f"GPU memory after data load - allocated: {torch.cuda.memory_allocated() / 1024**2:.2f} MB, cached: {torch.cuda.memory_reserved() / 1024**2:.2f} MB")
+                        vf_size = value_functions.element_size() * value_functions.nelement() / 1024**2 if value_functions is not None else 0
+                        logger.debug(f"Data sizes - env: {env_batch.element_size() * env_batch.nelement() / 1024**2:.2f} MB, "
+                                   f"target: {target_points.element_size() * target_points.nelement() / 1024**2:.2f} MB, "
+                                   f"vf: {vf_size:.2f} MB")
                 
                 # Time model forward pass
                 with logger.contextualize(operation="model_forward"):
