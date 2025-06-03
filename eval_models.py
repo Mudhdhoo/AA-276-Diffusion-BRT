@@ -197,10 +197,22 @@ class ModelEvaluator:
                 'config': config
             }
             
+        # Log model size and memory before moving to GPU
+        total_params = sum(p.numel() for p in model.parameters())
+        logger.info(f"Model parameters: {total_params:,}")
+        logger.info(f"Model device before moving: {next(model.parameters()).device}")
+        
+        # Move model to device
         model = model.to(self.device)
         model.eval()
         
+        # Log memory usage after moving to GPU
+        if torch.cuda.is_available():
+            logger.info(f"GPU memory allocated: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+            logger.info(f"GPU memory cached: {torch.cuda.memory_reserved() / 1024**2:.2f} MB")
+        
         logger.info(f"Loaded {model_info['type']} model with {model_info['state_dim']}D output")
+        logger.info(f"Model device after moving: {next(model.parameters()).device}")
         return model, model_info
     
     def _load_unet_model(self, checkpoint, config):
@@ -543,6 +555,7 @@ class ModelEvaluator:
         
         logger.info(f"Evaluating {model_type} model with {state_dim}D output")
         logger.info(f"DataLoader info: batch_size={test_loader.batch_size}, num_workers={test_loader.num_workers}")
+        logger.info(f"Model device: {next(model.parameters()).device}")
         
         # Log model info to wandb if enabled
         if self.wandb_logging:
@@ -579,6 +592,7 @@ class ModelEvaluator:
                     logger.debug("Moving data to device")
                     env_batch = env_batch.to(self.device)
                     target_points = target_points.to(self.device)
+                    logger.debug(f"Data device - env: {env_batch.device}, target: {target_points.device}")
                     logger.debug("Data loaded and moved to device")
                 
                 # Time model forward pass
