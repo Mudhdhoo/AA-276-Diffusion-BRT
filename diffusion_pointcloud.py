@@ -27,7 +27,7 @@ def parse_args():
                       help='Weights & Biases entity name')
     parser.add_argument('--seed', type=int, default=42,
                       help='Random seed for reproducibility')
-    parser.add_argument('--3d', action='store_true',
+    parser.add_argument('--use_3d', action='store_true',
                       help='Use 3D mode for training')
 
     # Training parameters
@@ -86,7 +86,7 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
             'guidance_scale': guidance_scale,
             'beta_start': beta_start,
             'beta_end': beta_end,
-            'is_3d': model.is_3d
+            'use_3d': model.use_3d
         })
 
     # Create directories for checkpoints and samples
@@ -98,7 +98,7 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
     
     # Create dataloaders for train and validation
     train_dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    val_dataset = BRTDataset(dataset.dataset_dir, split="val", is_3d=model.is_3d)
+    val_dataset = BRTDataset(dataset.dataset_dir, split="val", use_3d=model.use_3d)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -368,8 +368,8 @@ if __name__ == "__main__":
         torch.cuda.manual_seed_all(args.seed)
     
     # Create dataset
-    is_3d = getattr(args, '3d', False)  # Safely get the 3d flag
-    dataset = BRTDataset(args.dataset_dir, split="train", is_3d=is_3d)
+    use_3d = getattr(args, 'use_3d', False)  # Safely get the 3d flag
+    dataset = BRTDataset(args.dataset_dir, split="train", use_3d=use_3d)
     
     # Get dimensions from dataset
     STATE_DIM = dataset.state_dim
@@ -386,7 +386,7 @@ if __name__ == "__main__":
         beta_end=args.beta_end,
         device=args.device,
         null_conditioning_prob=args.null_conditioning_prob,
-        is_3d=is_3d
+        use_3d=use_3d
     ).to(args.device)
     
     print(f"Model initialized on {args.device}")
@@ -396,7 +396,7 @@ if __name__ == "__main__":
     print(f"Learning rate: {args.lr} -> {args.lr_min} (cosine annealing warm restarts, T_0={args.lr_restart_period}, T_mult={args.lr_restart_mult})")
     print(f"Sampling every {args.sample_every} epochs")
     print(f"Classifier-free guidance: null_conditioning_prob={args.null_conditioning_prob}, guidance_scale={args.guidance_scale}")
-    print(f"3D mode: {is_3d}")
+    print(f"3D mode: {use_3d}")
     
     # Train model
     losses, val_losses, vis_samples, val_vis_samples = train_model(
