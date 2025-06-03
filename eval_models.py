@@ -169,7 +169,8 @@ class ModelEvaluator:
     def load_model_from_checkpoint(self, checkpoint_path):
         """Load model from checkpoint and detect type automatically"""
         logger.info(f"Loading checkpoint from {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        # Fix for PyTorch 2.6+ weights_only default change - these are trusted checkpoints
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
         
         config = checkpoint.get('config', {})
         
