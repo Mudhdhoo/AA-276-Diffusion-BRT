@@ -163,7 +163,7 @@ def generate_denoising_gif(model, dataset, sample_idx, num_frames=50, save_dir="
             ax_main.set_title('Final Denoised State', 
                             fontsize=16, fontweight='bold', pad=25, color='black')
         
-        return scatter_main,
+        return scatter_main  # Return only the scatter plot object
     
     # Create animation
     anim = FuncAnimation(
