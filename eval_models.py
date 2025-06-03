@@ -153,6 +153,8 @@ class ModelEvaluator:
         self.wandb_logging = wandb_logging
         self.wandb_project = wandb_project
         self.wandb_run = None
+        self.current_split = None  # Track current split being evaluated
+        self.current_model_type = None  # Track current model type being evaluated
         
         # Initialize wandb if requested
         if self.wandb_logging:
@@ -454,6 +456,7 @@ class ModelEvaluator:
         
         os.makedirs(output_dir, exist_ok=True)
         model_name = f"{model_info['type']}_{model_info['state_dim']}D"
+        split_info = f"_{self.current_split}" if self.current_split else ""
         
         # Visualize first sample in batch
         pred_sample = predicted_points[0].cpu().numpy()
@@ -461,19 +464,19 @@ class ModelEvaluator:
         env_sample = env_batch[0].cpu().numpy()
         
         # Create regular comparison visualization with proper denormalization
-        save_path = os.path.join(output_dir, f"{model_name}_sample_{self.vis_sample_count+1:03d}_comparison.png")
+        save_path = os.path.join(output_dir, f"{model_name}{split_info}_sample_{self.vis_sample_count+1:03d}_comparison.png")
         visualize_comparison(
             target_sample, pred_sample, env_sample,
-            title=f"{model_name} - Sample {self.vis_sample_count+1} Comparison",
+            title=f"{model_name} - {self.current_split.capitalize()} Split - Sample {self.vis_sample_count+1} Comparison",
             save_path=save_path,
             dataset=dataset  # Pass dataset for proper coordinate denormalization
         )
         
         # Create detailed comparison visualization with theta slices
-        detailed_save_path = os.path.join(output_dir, f"{model_name}_sample_{self.vis_sample_count+1:03d}_detailed.png")
+        detailed_save_path = os.path.join(output_dir, f"{model_name}{split_info}_sample_{self.vis_sample_count+1:03d}_detailed.png")
         visualize_detailed_value_function_comparison(
             target_sample, pred_sample, env_sample,
-            title=f"{model_name} - Sample {self.vis_sample_count+1} Detailed Analysis",
+            title=f"{model_name} - {self.current_split.capitalize()} Split - Sample {self.vis_sample_count+1} Detailed Analysis",
             save_path=detailed_save_path,
             dataset=dataset
         )
@@ -481,15 +484,18 @@ class ModelEvaluator:
         # Log visualizations to wandb if enabled
         if self.wandb_logging:
             try:
+                # Create hierarchical logging structure
+                base_path = f"{model_info['type'].lower()}/{self.current_split}"
+                
                 # Log comparison plot
                 wandb.log({
-                    f"evaluation_plots/{model_name}_comparison_{self.vis_sample_count+1}": wandb.Image(save_path),
-                    f"evaluation_plots/{model_name}_detailed_{self.vis_sample_count+1}": wandb.Image(detailed_save_path),
-                    f"evaluation_plots/model_type": model_info['type'],
-                    f"evaluation_plots/state_dim": model_info['state_dim'],
-                    f"evaluation_plots/sample_idx": self.vis_sample_count+1
+                    f"{base_path}/comparison_{self.vis_sample_count+1}": wandb.Image(save_path),
+                    f"{base_path}/detailed_{self.vis_sample_count+1}": wandb.Image(detailed_save_path),
+                    f"{base_path}/model_type": model_info['type'],
+                    f"{base_path}/state_dim": model_info['state_dim'],
+                    f"{base_path}/sample_idx": self.vis_sample_count+1
                 })
-                logger.info(f"Logged visualization plots to wandb")
+                logger.info(f"Logged visualization plots to wandb under {base_path}")
             except Exception as e:
                 logger.warning(f"Failed to log visualization plots to wandb: {e}")
         
@@ -507,6 +513,14 @@ class ModelEvaluator:
             )
             if gif_path:
                 logger.info(f"Successfully generated GIF for visualization {self.vis_sample_count+1}: {gif_path}")
+                # Log GIF to wandb
+                if self.wandb_logging:
+                    try:
+                        wandb.log({
+                            f"{base_path}/denoising_gif_{self.vis_sample_count+1}": wandb.Video(gif_path, format="gif")
+                        })
+                    except Exception as e:
+                        logger.warning(f"Failed to log GIF to wandb: {e}")
             else:
                 logger.warning(f"Failed to generate GIF for visualization {self.vis_sample_count+1}")
         
@@ -523,14 +537,18 @@ class ModelEvaluator:
         # Store model instance for GIF generation
         model_info['model_instance'] = model
         
+        # Update current model type
+        self.current_model_type = model_type
+        
         logger.info(f"Evaluating {model_type} model with {state_dim}D output")
         
         # Log model info to wandb if enabled
         if self.wandb_logging:
+            base_path = f"{model_type.lower()}/{self.current_split}"
             wandb.log({
-                "model_info/type": model_type,
-                "model_info/state_dim": state_dim,
-                "model_info/config": model_info.get('config', {})
+                f"{base_path}/model_info/type": model_type,
+                f"{base_path}/model_info/state_dim": state_dim,
+                f"{base_path}/model_info/config": model_info.get('config', {})
             })
         
         chamfer_distances = []
@@ -562,9 +580,10 @@ class ModelEvaluator:
                 
                 # Log batch-level metrics to wandb if enabled
                 if self.wandb_logging:
+                    base_path = f"{model_type.lower()}/{self.current_split}"
                     wandb.log({
-                        f"batch_metrics/chamfer_distance": chamfer_dist,
-                        f"batch_metrics/batch_idx": batch_idx
+                        f"{base_path}/batch_metrics/chamfer_distance": chamfer_dist,
+                        f"{base_path}/batch_metrics/batch_idx": batch_idx
                     })
                 
                 # Save visualization if we haven't reached the limit
@@ -594,12 +613,13 @@ class ModelEvaluator:
                 
                 # Log batch-level metrics to wandb if enabled
                 if self.wandb_logging:
+                    base_path = f"{model_type.lower()}/{self.current_split}"
                     log_dict = {
-                        f"batch_metrics/chamfer_distance": chamfer_dist,
-                        f"batch_metrics/batch_idx": batch_idx
+                        f"{base_path}/batch_metrics/chamfer_distance": chamfer_dist,
+                        f"{base_path}/batch_metrics/batch_idx": batch_idx
                     }
                     if value_l2_error is not None:
-                        log_dict[f"batch_metrics/value_l2_error"] = value_l2_error
+                        log_dict[f"{base_path}/batch_metrics/value_l2_error"] = value_l2_error
                     wandb.log(log_dict)
                 
                 # Save visualization if we haven't reached the limit
@@ -628,29 +648,30 @@ class ModelEvaluator:
         
         # Log final metrics to wandb if enabled
         if self.wandb_logging:
+            base_path = f"{model_type.lower()}/{self.current_split}"
             final_metrics = {
-                f"final_metrics/chamfer_distance_mean": results['chamfer_distance_mean'],
-                f"final_metrics/chamfer_distance_std": results['chamfer_distance_std'],
-                f"final_metrics/num_chamfer_samples": results['num_chamfer_samples']
+                f"{base_path}/final_metrics/chamfer_distance_mean": results['chamfer_distance_mean'],
+                f"{base_path}/final_metrics/chamfer_distance_std": results['chamfer_distance_std'],
+                f"{base_path}/final_metrics/num_chamfer_samples": results['num_chamfer_samples']
             }
             if 'value_l2_error_mean' in results:
                 final_metrics.update({
-                    f"final_metrics/value_l2_error_mean": results['value_l2_error_mean'],
-                    f"final_metrics/value_l2_error_std": results['value_l2_error_std'],
-                    f"final_metrics/num_value_samples": results['num_value_samples']
+                    f"{base_path}/final_metrics/value_l2_error_mean": results['value_l2_error_mean'],
+                    f"{base_path}/final_metrics/value_l2_error_std": results['value_l2_error_std'],
+                    f"{base_path}/final_metrics/num_value_samples": results['num_value_samples']
                 })
             wandb.log(final_metrics)
             
             # Create and log summary table
             summary_data = [
-                [model_type, state_dim, results['chamfer_distance_mean'], 
+                [model_type, state_dim, self.current_split, results['chamfer_distance_mean'], 
                  results.get('value_l2_error_mean', 'N/A'), results['num_chamfer_samples']]
             ]
             summary_table = wandb.Table(
                 data=summary_data, 
-                columns=["Model Type", "State Dim", "Chamfer Distance", "Value L2 Error", "Samples"]
+                columns=["Model Type", "State Dim", "Split", "Chamfer Distance", "Value L2 Error", "Samples"]
             )
-            wandb.log({"evaluation_summary": summary_table})
+            wandb.log({f"{base_path}/evaluation_summary": summary_table})
         
         return results
 
@@ -665,10 +686,10 @@ def main():
                       help='Use default wandb artifacts for UNet and Diffusion models')
     parser.add_argument('--unet_artifact', type=str, 
                       default=DEFAULT_ARTIFACTS['unet'],
-                      help='Wandb artifact path for UNet model (default: malteny-stanford/brt-unet-baseline/unet-checkpoint-deep-wave-6-epoch-50:v0)')
+                      help='Wandb artifact path for UNet model')
     parser.add_argument('--diffusion_artifact', type=str,
                       default=DEFAULT_ARTIFACTS['diffusion'], 
-                      help='Wandb artifact path for Diffusion model (default: malteny-stanford/brt-diffusion/model-checkpoint-snowy-vortex-24-epoch-2000:v0)')
+                      help='Wandb artifact path for Diffusion model')
     parser.add_argument('--batch_size', type=int, default=8,
                       help='Evaluation batch size')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
@@ -681,8 +702,8 @@ def main():
                       help='Disable saving visualizations')
     parser.add_argument('--max_vis_samples', type=int, default=10,
                       help='Maximum number of samples to visualize per model')
-    parser.add_argument('--split', type=str, default='test', choices=['train', 'val', 'test'],
-                      help='Dataset split to evaluate on')
+    parser.add_argument('--splits', nargs='*', default=['train', 'val', 'test'],
+                      help='Dataset splits to evaluate on')
     parser.add_argument('--seed', type=int, default=42,
                       help='Random seed for reproducibility')
     
@@ -782,7 +803,7 @@ def main():
         # Configure wandb
         wandb_config = {
             'dataset_dir': args.dataset_dir,
-            'split': args.split,
+            'splits': args.splits,
             'batch_size': args.batch_size,
             'device': args.device,
             'seed': args.seed,
@@ -795,95 +816,82 @@ def main():
         if args.wandb_entity:
             wandb_config['entity'] = args.wandb_entity
     
-    # Load dataset
-    logger.info(f"Loading {args.split} dataset...")
-    dataset = BRTDataset(args.dataset_dir, split=args.split)
-    data_loader = DataLoader(dataset, batch_size=args.batch_size, 
-                           shuffle=False, num_workers=args.num_workers)
-    
-    # Load dataset with value functions for interpolation
-    dataset_with_vf = BRTDataset(args.dataset_dir, split=args.split, return_value_function=True)
-    data_loader_with_vf = DataLoader(dataset_with_vf, batch_size=args.batch_size,
-                                   shuffle=False, num_workers=args.num_workers)
-    
-    logger.info(f"{args.split.capitalize()} dataset loaded: {len(dataset)} samples")
-    
-    # Write evaluation info to file
-    info_file = os.path.join(args.output_dir, 'evaluation_info.txt')
-    with open(info_file, 'w') as f:
-        f.write(f"Evaluation Information\n")
-        f.write(f"=====================\n")
-        f.write(f"Timestamp: {timestamp}\n")
-        f.write(f"Dataset: {args.dataset_dir}\n")
-        f.write(f"Split: {args.split}\n")
-        f.write(f"Total samples: {len(dataset)}\n")
-        f.write(f"Batch size: {args.batch_size}\n")
-        f.write(f"Device: {args.device}\n")
-        f.write(f"Seed: {args.seed}\n")
-        f.write(f"Max visualization samples: {args.max_vis_samples}\n")
-        f.write(f"Wandb logging: {args.wandb_logging}\n")
-        if args.wandb_logging:
-            f.write(f"Wandb project: {args.wandb_project}\n")
-        f.write(f"Checkpoints to evaluate: {len(checkpoints_to_evaluate)}\n")
-        for i, (name, checkpoint_path) in enumerate(checkpoints_to_evaluate):
-            f.write(f"  {i+1}. {name}: {checkpoint_path}\n")
-        f.write(f"\n")
-    
-    # Evaluate each checkpoint
+    # Evaluate each checkpoint across all splits
     all_results = []
     results_summary = []
     
     for checkpoint_idx, (checkpoint_name, checkpoint_path) in enumerate(checkpoints_to_evaluate):
-        try:
-            logger.info(f"Evaluating checkpoint {checkpoint_idx+1}/{len(checkpoints_to_evaluate)}: {checkpoint_name} ({checkpoint_path})")
-            
-            # Load model
-            model, model_info = evaluator.load_model_from_checkpoint(checkpoint_path)
-            
-            # Choose appropriate data loader
-            if model_info['state_dim'] == 4:
-                loader = data_loader_with_vf
-                dataset_for_denorm = dataset_with_vf
-            else:
-                loader = data_loader
-                dataset_for_denorm = dataset
-            
-            # Update evaluator to limit visualizations
-            evaluator.max_vis_samples = args.max_vis_samples
-            evaluator.vis_sample_count = 0
-            
-            # Evaluate
-            results = evaluator.evaluate_model(model, model_info, loader, dataset_for_denorm, args.output_dir)
-            results['checkpoint_path'] = checkpoint_path
-            results['checkpoint_name'] = checkpoint_name
-            results['checkpoint_basename'] = os.path.basename(checkpoint_path)
-            results['evaluation_timestamp'] = timestamp
-            
-            # Log results
-            logger.info(f"Results for {checkpoint_name}:")
-            logger.info(f"  Model Type: {results['model_type']}")
-            logger.info(f"  State Dim: {results['state_dim']}")
-            logger.info(f"  Chamfer Distance: {results['chamfer_distance_mean']:.6f} ± {results['chamfer_distance_std']:.6f}")
-            if 'value_l2_error_mean' in results:
-                logger.info(f"  Value L2 Error: {results['value_l2_error_mean']:.6f} ± {results['value_l2_error_std']:.6f}")
-            
-            all_results.append(results)
-            
-            # Create summary for this model
-            summary = f"Model: {results['model_type']} ({results['state_dim']}D)\n"
-            summary += f"Checkpoint: {checkpoint_name}\n"
-            summary += f"Chamfer Distance: {results['chamfer_distance_mean']:.6f} ± {results['chamfer_distance_std']:.6f}\n"
-            if 'value_l2_error_mean' in results:
-                summary += f"Value L2 Error: {results['value_l2_error_mean']:.6f} ± {results['value_l2_error_std']:.6f}\n"
-            summary += f"Samples evaluated: {results['num_chamfer_samples']}\n"
-            summary += "\n"
-            results_summary.append(summary)
-            
-        except Exception as e:
-            logger.error(f"Failed to evaluate {checkpoint_name}: {e}")
-            import traceback
-            traceback.print_exc()
-            continue
+        for split in args.splits:
+            try:
+                logger.info(f"Evaluating checkpoint {checkpoint_idx+1}/{len(checkpoints_to_evaluate)} on {split} split: {checkpoint_name} ({checkpoint_path})")
+                
+                # Load model
+                model, model_info = evaluator.load_model_from_checkpoint(checkpoint_path)
+                
+                # Load dataset for current split
+                logger.info(f"Loading {split} dataset...")
+                dataset = BRTDataset(args.dataset_dir, split=split)
+                data_loader = DataLoader(dataset, batch_size=args.batch_size, 
+                                       shuffle=False, num_workers=args.num_workers)
+                
+                # Load dataset with value functions for interpolation
+                dataset_with_vf = BRTDataset(args.dataset_dir, split=split, return_value_function=True)
+                data_loader_with_vf = DataLoader(dataset_with_vf, batch_size=args.batch_size,
+                                               shuffle=False, num_workers=args.num_workers)
+                
+                logger.info(f"{split.capitalize()} dataset loaded: {len(dataset)} samples")
+                
+                # Choose appropriate data loader
+                if model_info['state_dim'] == 4:
+                    loader = data_loader_with_vf
+                    dataset_for_denorm = dataset_with_vf
+                else:
+                    loader = data_loader
+                    dataset_for_denorm = dataset
+                
+                # Update evaluator to limit visualizations and set split
+                evaluator.max_vis_samples = args.max_vis_samples
+                evaluator.vis_sample_count = 0
+                evaluator.current_split = split  # Add this to ModelEvaluator class
+                
+                # Create split-specific output directory
+                split_output_dir = os.path.join(args.output_dir, f"{checkpoint_name}_{split}")
+                os.makedirs(split_output_dir, exist_ok=True)
+                
+                # Evaluate
+                results = evaluator.evaluate_model(model, model_info, loader, dataset_for_denorm, split_output_dir)
+                results['checkpoint_path'] = checkpoint_path
+                results['checkpoint_name'] = checkpoint_name
+                results['checkpoint_basename'] = os.path.basename(checkpoint_path)
+                results['evaluation_timestamp'] = timestamp
+                results['split'] = split
+                
+                # Log results
+                logger.info(f"Results for {checkpoint_name} on {split} split:")
+                logger.info(f"  Model Type: {results['model_type']}")
+                logger.info(f"  State Dim: {results['state_dim']}")
+                logger.info(f"  Chamfer Distance: {results['chamfer_distance_mean']:.6f} ± {results['chamfer_distance_std']:.6f}")
+                if 'value_l2_error_mean' in results:
+                    logger.info(f"  Value L2 Error: {results['value_l2_error_mean']:.6f} ± {results['value_l2_error_std']:.6f}")
+                
+                all_results.append(results)
+                
+                # Create summary for this model and split
+                summary = f"Model: {results['model_type']} ({results['state_dim']}D)\n"
+                summary += f"Split: {split}\n"
+                summary += f"Checkpoint: {checkpoint_name}\n"
+                summary += f"Chamfer Distance: {results['chamfer_distance_mean']:.6f} ± {results['chamfer_distance_std']:.6f}\n"
+                if 'value_l2_error_mean' in results:
+                    summary += f"Value L2 Error: {results['value_l2_error_mean']:.6f} ± {results['value_l2_error_std']:.6f}\n"
+                summary += f"Samples evaluated: {results['num_chamfer_samples']}\n"
+                summary += "\n"
+                results_summary.append(summary)
+                
+            except Exception as e:
+                logger.error(f"Failed to evaluate {checkpoint_name} on {split} split: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
     
     # Save results to JSON
     results_file = os.path.join(args.output_dir, 'evaluation_results.json')
@@ -896,11 +904,11 @@ def main():
         f.write(f"Evaluation Results\n")
         f.write(f"==================\n")
         f.write(f"Timestamp: {timestamp}\n")
-        f.write(f"Dataset: {args.dataset_dir} ({args.split} split)\n")
+        f.write(f"Dataset: {args.dataset_dir}\n")
         f.write(f"Total samples evaluated: {len(dataset)}\n")
         f.write(f"Seed: {args.seed}\n\n")
         
-        # Write summary for each model
+        # Write summary for each model and split
         for summary in results_summary:
             f.write(summary)
         
@@ -911,6 +919,7 @@ def main():
         
         for result in all_results:
             f.write(f"Model: {result['model_type']} ({result['state_dim']}D)\n")
+            f.write(f"Split: {result['split']}\n")
             f.write(f"Checkpoint: {result['checkpoint_name']}\n")
             f.write("-" * 40 + "\n")
             f.write(f"Chamfer Distance:\n")
@@ -938,6 +947,7 @@ def main():
                 result['checkpoint_name'],
                 result['model_type'],
                 result['state_dim'],
+                result['split'],
                 result['chamfer_distance_mean'],
                 result['chamfer_distance_std'],
                 result.get('value_l2_error_mean', 'N/A'),
@@ -947,7 +957,7 @@ def main():
         
         comparison_table = wandb.Table(
             data=comparison_data,
-            columns=["Checkpoint", "Model Type", "State Dim", "Chamfer Mean", "Chamfer Std", 
+            columns=["Checkpoint", "Model Type", "State Dim", "Split", "Chamfer Mean", "Chamfer Std", 
                     "Value L2 Mean", "Value L2 Std", "Samples"]
         )
         wandb.log({"evaluation_comparison": comparison_table})
@@ -970,8 +980,7 @@ def main():
     print("EVALUATION SUMMARY")
     print("="*80)
     print(f"Evaluation completed at: {timestamp}")
-    print(f"Dataset: {args.dataset_dir} ({args.split} split)")
-    print(f"Total samples: {len(dataset)}")
+    print(f"Dataset: {args.dataset_dir}")
     print(f"Results saved to: {args.output_dir}")
     if args.wandb_logging:
         print(f"Wandb project: {args.wandb_project}")
