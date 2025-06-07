@@ -158,10 +158,10 @@ def process_dataset(dataset_dir, output_dir, n_points_inside=1000, n_points_outs
 
 def main():
     parser = argparse.ArgumentParser(description='Convert value functions to point clouds')
-    parser.add_argument('--dataset_dir', type=str, default='dataset_64', help='Path to input dataset directory')
-    parser.add_argument('--output_dir', type=str, default='point_cloud_dataset', help='Path to output directory')
-    parser.add_argument('--n_points_inside', type=int, default=1000, help='Number of points to sample inside BRT (value <= 0)')
-    parser.add_argument('--n_points_outside', type=int, default=5000, help='Number of points to sample outside BRT (value > 0)')
+    parser.add_argument('--dataset_dir', type=str, default='/Users/malte/AA-276-Diffusion-BRT/1070_4d_pointcloud_3000inside_1000outside_4cloudsperenv', help='Path to input dataset directory')
+    parser.add_argument('--output_dir', type=str, default='5000_1000_newest', help='Path to output directory')
+    parser.add_argument('--n_points_inside', type=int, default=5000, help='Number of points to sample inside BRT (value <= 0)')
+    parser.add_argument('--n_points_outside', type=int, default=1000, help='Number of points to sample outside BRT (value > 0)')
     parser.add_argument('--clouds_per_sample', type=int, default=4, help='Number of point clouds to generate per sample')
     
     args = parser.parse_args()
