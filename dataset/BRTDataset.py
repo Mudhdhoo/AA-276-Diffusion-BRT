@@ -7,15 +7,19 @@ from stats.train_stats import MEAN, STD
 
 class BRTDataset(Dataset):
     """Dataset for BRT point clouds and environments"""
-    def __init__(self, dataset_dir, with_value=True, split="train"):
+    def __init__(self, dataset_dir, split="train", return_value_function=False, use_3d=False):
         """
         Args:
             dataset_dir: Directory containing the dataset
             split: One of "train", "val", or "test"
+            return_value_function: If True, also returns the converged value function (last time slice)
+            use_3d: If True, only use first 3 dimensions (x,y,theta) of the 4D point cloud
         """
         self.dataset_dir = dataset_dir
         self.split = split
-        self.with_value = with_value
+        self.return_value_function = return_value_function
+        self.use_3d = use_3d
+        
         # Get all sample directories
         self.sample_dirs = sorted([d for d in os.listdir(dataset_dir) if d.startswith('sample_')])
         
@@ -46,8 +50,19 @@ class BRTDataset(Dataset):
         first_env = np.load(os.path.join(dataset_dir, first_sample_dir, 'environment_grid.npy'))
         
         self.num_points = first_point_cloud.shape[0]  # N points
-        self.state_dim = first_point_cloud.shape[1]   # 3D coordinates
+        self.state_dim = 3 if use_3d else first_point_cloud.shape[1]   # 3D or 4D coordinates
         self.env_size = first_env.shape[0]            # Environment grid size
+        
+        # Check if value functions are available when requested
+        if self.return_value_function:
+            first_value_func_path = os.path.join(dataset_dir, first_sample_dir, 'value_function.npy')
+            if os.path.exists(first_value_func_path):
+                first_value_func = np.load(first_value_func_path)
+                self.value_function_shape = first_value_func.shape
+                logger.info(f"Value function shape: {self.value_function_shape}")
+            else:
+                logger.warning(f"Value function requested but not found in {first_sample_dir}. Will return None for missing value functions.")
+                self.value_function_shape = None
         
         # Compute normalization statistics
         #self.compute_normalization_stats()
@@ -153,12 +168,25 @@ class BRTDataset(Dataset):
         point_cloud = np.load(os.path.join(self.dataset_dir, sample_dir, pc_file))
         env_grid = np.load(os.path.join(self.dataset_dir, sample_dir, 'environment_grid.npy'))
 
+        # If using 3D, only take first 3 dimensions
+        if self.use_3d:
+            point_cloud = point_cloud[:, :3]
+
         point_cloud = self.normalize_points(point_cloud)
 
         point_cloud = torch.FloatTensor(point_cloud)
         env_grid = torch.FloatTensor(env_grid)
-
-        if not self.with_value:
-            point_cloud = point_cloud[:, :3]
+        
+        # Optionally load value function
+        if self.return_value_function:
+            value_func_path = os.path.join(self.dataset_dir, sample_dir, 'value_function.npy')
+            if os.path.exists(value_func_path):
+                value_function = np.load(value_func_path)
+                # Return the last time slice (converged value function)
+                converged_value_func = torch.FloatTensor(value_function[-1])
+                return point_cloud, env_grid, converged_value_func
+            else:
+                # Return None if value function is missing
+                return point_cloud, env_grid, None
         
         return point_cloud, env_grid

@@ -32,7 +32,7 @@ def parse_args():
 def generate_denoising_gif(model, dataset, sample_idx, num_frames=50, save_dir="plots/gifs", guidance_scale=1.0):
     """Generate a GIF showing the denoising process for a sample from the dataset."""
     # Get sample from dataset
-    point_cloud, env_grid = dataset[sample_idx]
+    point_cloud, env_grid, *_ = dataset[sample_idx]  # Use wildcard to handle extra return values
     point_cloud = point_cloud.unsqueeze(0).to(model.device)  # Add batch dimension
     env_grid = env_grid.unsqueeze(0).to(model.device)  # Add batch dimension
     
@@ -144,7 +144,7 @@ def generate_denoising_gif(model, dataset, sample_idx, num_frames=50, save_dir="
             # If not square, create a simple visualization
             env_grid_2d = np.ones((64, 64)) * 0.5  # Gray background
     
-    im = ax_env.imshow(env_grid_2d, origin='lower', extent=[0, 10, 0, 10], 
+    im = ax_env.imshow(env_grid_2d.T, origin='lower', extent=[0, 10, 0, 10], 
                        cmap='plasma', alpha=0.8, interpolation='bilinear')
     
     # Add colorbar for environment grid
@@ -191,13 +191,13 @@ def generate_denoising_gif(model, dataset, sample_idx, num_frames=50, save_dir="
         # Update title based on whether we're in the holding frames
         if frame < num_frames:
             current_timestep = model.num_timesteps - 1 - timesteps[frame]
-            ax_main.set_title(f'Denoising Step t={current_timestep}', 
+            title = ax_main.set_title(f'Denoising Step t={current_timestep}', 
                             fontsize=16, fontweight='bold', pad=25, color='black')
         else:
-            ax_main.set_title('Final Denoised State', 
+            title = ax_main.set_title('Final Denoised State', 
                             fontsize=16, fontweight='bold', pad=25, color='black')
         
-        return scatter_main,
+        return scatter_main, title  # Return all artists that are being updated
     
     # Create animation
     anim = FuncAnimation(
@@ -210,9 +210,11 @@ def generate_denoising_gif(model, dataset, sample_idx, num_frames=50, save_dir="
     
     # Save animation
     os.makedirs(save_dir, exist_ok=True)
-    anim.save(os.path.join(save_dir, f'{sample_idx}.gif'), writer=PillowWriter(fps=10))
+    gif_path = os.path.join(save_dir, f'{sample_idx}.gif')
+    anim.save(gif_path, writer=PillowWriter(fps=10))
     plt.close()
-    logger.info(f"Saved GIF to {os.path.join(save_dir, f'{sample_idx}.gif')}")
+    logger.info(f"Saved GIF to {gif_path}")
+    return gif_path
 
 def main():
     # Set device

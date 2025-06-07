@@ -128,7 +128,8 @@ def visualize_forward_process(model, x_start, env, dataset, timesteps_to_show=No
         
         # Row 3: Environment plot
         ax3 = fig.add_subplot(3, num_timesteps, i + 1 + 2*num_timesteps)
-        im = ax3.imshow(env, cmap='RdYlBu_r', origin='lower', extent=[0, 10, 0, 10])
+        # Transpose grid so that grid[i,j] maps to physical position (x=j, y=i)
+        im = ax3.imshow(env.T, cmap='RdYlBu_r', origin='lower', extent=[0, 10, 0, 10])
         ax3.set_title('Environment')
         ax3.set_xlabel('X Position (m)')
         ax3.set_ylabel('Y Position (m)')

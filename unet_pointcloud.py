@@ -1,19 +1,19 @@
 import torch
 import numpy as np
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from tqdm import tqdm
 import os
 import argparse
 import wandb
-from models.diffusion_modules import BRTDiffusionModel
+from models.unet_baseline import BRTUNet  # Your U-Net model
 from dataset.BRTDataset import BRTDataset
-from utils.visualizations import visualize_comparison, visualize_denoising_with_true
+from utils.visualizations import visualize_comparison
 from loguru import logger
 from datetime import datetime
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Train BRT Diffusion Model')
+    parser = argparse.ArgumentParser(description='Train BRT U-Net Baseline Model')
     parser.add_argument('--dataset_dir', type=str, 
                       default='1070_4d_pointcloud_3000inside_1000outside_4cloudsperenv',
                       help='Path to dataset directory containing sample_* folders')
@@ -21,54 +21,55 @@ def parse_args():
                       help='Device to use for training (cuda/cpu)')
     parser.add_argument('--wandb_api_key', type=str, default=None,
                       help='Weights & Biases API key (optional)')
-    parser.add_argument('--wandb_project', type=str, default='brt-diffusion',
+    parser.add_argument('--wandb_project', type=str, default='brt-unet-baseline',
                       help='Weights & Biases project name')
     parser.add_argument('--wandb_entity', type=str, default=None,
                       help='Weights & Biases entity name')
     parser.add_argument('--seed', type=int, default=42,
                       help='Random seed for reproducibility')
-    parser.add_argument('--use_3d', action='store_true',
-                      help='Use 3D mode for training')
 
     # Training parameters
-    parser.add_argument('--num_epochs', type=int, default=2000,
+    parser.add_argument('--num_epochs', type=int, default=1000,
                       help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=64,
                       help='Training batch size')
-    parser.add_argument('--lr', type=float, default=2e-4,
+    parser.add_argument('--lr', type=float, default=1e-3,
                       help='Learning rate')
     parser.add_argument('--lr_min', type=float, default=1e-6,
                       help='Minimum learning rate for cosine annealing')
-    parser.add_argument('--lr_restart_period', type=int, default=100,
+    parser.add_argument('--lr_restart_period', type=int, default=50,
                       help='Initial restart period (T_0) for cosine annealing warm restarts')
     parser.add_argument('--lr_restart_mult', type=int, default=2,
                       help='Restart period multiplier (T_mult) for cosine annealing warm restarts')
-    parser.add_argument('--sample_every', type=int, default=100,
+    parser.add_argument('--sample_every', type=int, default=30,
                       help='Generate samples every N epochs')
-    parser.add_argument('--checkpoint_every', type=int, default=100,
+    parser.add_argument('--checkpoint_every', type=int, default=50,
                       help='Save model checkpoint every N epochs')
 
-    # Diffusion parameters
-    parser.add_argument('--num_timesteps', type=int, default=1000,
-                      help='Number of diffusion timesteps')
-    parser.add_argument("--beta_start", type=float, default=1e-4,
-                      help="Beta start for the beta schedule")
-    parser.add_argument("--beta_end", type=float, default=0.005,
-                      help="Beta end for the beta schedule")
-    parser.add_argument('--null_conditioning_prob', type=float, default=0.15,
-                      help='Probability of using null conditioning during training for CFG')
-    parser.add_argument('--guidance_scale', type=float, default=1.5,
-                      help='Guidance scale for classifier-free guidance during sampling')
+    # Model parameters
+    parser.add_argument('--env_encoding_dim', type=int, default=128,
+                      help='Environment encoding dimension')
+    parser.add_argument('--dropout_rate', type=float, default=0.2,
+                      help='Dropout rate for regularization')
+    parser.add_argument('--weight_decay_strength', type=float, default=0.005,
+                      help='L2 regularization strength')
+    
+    
     return parser.parse_args()
 
 
-def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=1e-6, lr_restart_period=100, lr_restart_mult=2, sample_every=10, checkpoint_every=100, wandb_api_key=None, wandb_project='brt-diffusion', wandb_entity=None, guidance_scale=1.0, beta_start=1e-4, beta_end=0.005):
-    """Training loop for the diffusion model"""
+def train_model(model, dataset, num_epochs=500, batch_size=16, lr=1e-3, lr_min=1e-6, 
+                lr_restart_period=50, lr_restart_mult=2, sample_every=20, checkpoint_every=50, 
+                wandb_api_key=None, wandb_project='brt-unet-baseline', wandb_entity=None, 
+                weight_decay_strength=0.01):
+    """Training loop for the U-Net baseline model"""
+    
     # Initialize wandb
     if wandb_api_key:
         wandb.login(key=wandb_api_key)
         wandb.init(project=wandb_project, entity=wandb_entity)
         wandb.config.update({
+            'model_type': 'U-Net Baseline',
             'num_epochs': num_epochs,
             'batch_size': batch_size,
             'learning_rate': lr,
@@ -77,40 +78,39 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
             'lr_restart_mult': lr_restart_mult,
             'sample_every': sample_every,
             'checkpoint_every': checkpoint_every,
-            'num_timesteps': model.num_timesteps,
             'num_points': model.num_points,
             'env_size': model.env_size,
+            'max_state_dim': model.max_state_dim,
             'points_mean': dataset.points_mean.tolist(),
             'points_std': dataset.points_std.tolist(),
-            'null_conditioning_prob': model.null_conditioning_prob,
-            'guidance_scale': guidance_scale,
-            'beta_start': beta_start,
-            'beta_end': beta_end,
-            'use_3d': model.use_3d
+            'loss_type': 'chamfer_only',
+            'dropout_rate': getattr(model, 'dropout_rate', 0.2),
+            'weight_decay_strength': weight_decay_strength
         })
 
     # Create directories for checkpoints and samples
     run_name = wandb.run.name if wandb_api_key else datetime.now().strftime("%Y%m%d_%H%M%S")
-    checkpoint_dir = os.path.join('checkpoints', run_name)
-    samples_dir = os.path.join('samples', run_name)
+    checkpoint_dir = os.path.join('checkpoints', 'unet_baseline', run_name)
+    samples_dir = os.path.join('samples', 'unet_baseline', run_name)
     os.makedirs(checkpoint_dir, exist_ok=True)
     os.makedirs(samples_dir, exist_ok=True)
     
     # Create dataloaders for train and validation
-    train_dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    val_dataset = BRTDataset(dataset.dataset_dir, split="val", use_3d=model.use_3d)
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    train_dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+    val_dataset = BRTDataset(dataset.dataset_dir, split="val")
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
     
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    # Optimizer with weight decay
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=lr_restart_period, T_mult=lr_restart_mult, eta_min=lr_min)
     
     # Create fixed training samples for consistent evaluation
-    num_vis_samples = 8  # Increased from 4 to 8 samples
+    num_vis_samples = 8
     train_indices = torch.randint(0, len(dataset), (num_vis_samples,))
     vis_samples = [(dataset[i][0], dataset[i][1]) for i in train_indices]  # (point_cloud, env_grid) pairs
     
     # Create fixed validation samples for consistent evaluation
-    num_val_vis_samples = 2  # 2 validation samples
+    num_val_vis_samples = 2
     val_indices = torch.randint(0, len(val_dataset), (num_val_vis_samples,))
     val_vis_samples = [(val_dataset[i][0], val_dataset[i][1]) for i in val_indices]
     
@@ -118,17 +118,31 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
     losses = []
     val_losses = []
     
+    logger.info(f"Starting training for {num_epochs} epochs")
+    logger.info(f"Training samples: {len(dataset)}, Validation samples: {len(val_dataset)}")
+    
     for epoch in range(num_epochs):
         epoch_losses = []
         
         # Training loop
+        model.train()
         for brt_batch, env_batch in tqdm(train_dataloader, desc=f'Epoch {epoch+1}/{num_epochs}'):
-            brt_batch = brt_batch.to(model.device)
-            env_batch = env_batch.to(model.device)
+            brt_batch = brt_batch.to(model.device if hasattr(model, 'device') else next(model.parameters()).device)
+            env_batch = env_batch.to(model.device if hasattr(model, 'device') else next(model.parameters()).device)
             
             optimizer.zero_grad()
-            loss = model.compute_loss(brt_batch, env_batch)
+            
+            # Forward pass
+            pred_brt = model(env_batch, target_state_dim=brt_batch.shape[-1])
+            
+            # Compute loss (simple Chamfer distance only)
+            loss = model.compute_loss(pred_brt, brt_batch, include_l2_reg=True)
+            
             loss.backward()
+            
+            # Gradient clipping for stability
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
             optimizer.step()
             
             epoch_losses.append(loss.item())
@@ -142,9 +156,14 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
         val_epoch_losses = []
         with torch.no_grad():
             for brt_batch, env_batch in val_dataloader:
-                brt_batch = brt_batch.to(model.device)
-                env_batch = env_batch.to(model.device)
-                loss = model.compute_loss(brt_batch, env_batch)
+                brt_batch = brt_batch.to(model.device if hasattr(model, 'device') else next(model.parameters()).device)
+                env_batch = env_batch.to(model.device if hasattr(model, 'device') else next(model.parameters()).device)
+                
+                # Forward pass
+                pred_brt = model(env_batch, target_state_dim=brt_batch.shape[-1])
+                
+                # Compute loss (without L2 reg for validation)
+                loss = model.compute_loss(pred_brt, brt_batch, include_l2_reg=False)
                 val_epoch_losses.append(loss.item())
         
         avg_val_loss = np.mean(val_epoch_losses)
@@ -156,7 +175,8 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
             if wandb_api_key:
                 wandb.log({
                     'train_loss': avg_loss,
-                    'val_loss': avg_val_loss
+                    'val_loss': avg_val_loss,
+                    'learning_rate': optimizer.param_groups[0]['lr']
                 }, step=epoch)
             
         # Save checkpoint periodically
@@ -166,6 +186,7 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
                 'epoch': epoch + 1,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
                 'train_loss': avg_loss,
                 'val_loss': avg_val_loss,
                 'vis_samples': vis_samples,
@@ -173,18 +194,18 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
                 'train_losses': losses,
                 'val_losses': val_losses,
                 'config': {
+                    'model_type': 'U-Net Baseline',
                     'batch_size': batch_size,
                     'learning_rate': lr,
                     'lr_min': lr_min,
                     'lr_restart_period': lr_restart_period,
                     'lr_restart_mult': lr_restart_mult,
-                    'num_timesteps': model.num_timesteps,
                     'num_points': model.num_points,
                     'env_size': model.env_size,
-                    'null_conditioning_prob': model.null_conditioning_prob,
-                    'guidance_scale': guidance_scale,
-                    'beta_start': beta_start,
-                    'beta_end': beta_end,
+                    'max_state_dim': model.max_state_dim,
+                    'loss_type': 'chamfer_only',
+                    'dropout_rate': getattr(model, 'dropout_rate', 0.2),
+                    'weight_decay_strength': weight_decay_strength,
                     'run_name': run_name
                 }
             }, checkpoint_path)
@@ -193,9 +214,9 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
             # Save checkpoint to wandb
             if wandb_api_key:
                 artifact = wandb.Artifact(
-                    name=f'model-checkpoint-{run_name}-epoch-{epoch+1}',
+                    name=f'unet-checkpoint-{run_name}-epoch-{epoch+1}',
                     type='model',
-                    description=f'Model checkpoint at epoch {epoch+1}'
+                    description=f'U-Net model checkpoint at epoch {epoch+1}'
                 )
                 artifact.add_file(checkpoint_path)
                 wandb.log_artifact(artifact)
@@ -213,10 +234,11 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
                 # Generate and plot training samples
                 for i, (true_pc, env_grid) in enumerate(vis_samples):
                     # Move to device
-                    env_grid = env_grid.to(model.device)
+                    device = model.device if hasattr(model, 'device') else next(model.parameters()).device
+                    env_grid = env_grid.to(device)
                     
-                    # Generate sample
-                    generated_brt = model.sample(env_grid.unsqueeze(0), num_samples=1, guidance_scale=guidance_scale)
+                    # Generate sample (single forward pass for U-Net)
+                    generated_brt = model(env_grid.unsqueeze(0), target_state_dim=true_pc.shape[-1])
                     generated_brt = generated_brt[0].cpu().numpy()  # Remove batch dimension
                     
                     # Create comparison visualization
@@ -224,53 +246,22 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
                     visualize_comparison(
                         true_pc.cpu().numpy(),
                         generated_brt,
-                        env_grid.squeeze(0).cpu().numpy(),
-                        f'Training Sample {i+1} Comparison',
+                        env_grid.cpu().numpy(),
+                        f'Training Sample {i+1} Comparison (Epoch {epoch+1})',
                         comparison_save_path,
                         dataset
                     )
                     if wandb_api_key:
                         wandb.log({f'epoch_{epoch+1}/train_comparison_{i+1}': wandb.Image(comparison_save_path)})
-                    
-                    # Start from pure noise
-                    x_t = torch.randn(1, model.num_points, model.state_dim).to(model.device)
-                    
-                    # Save exactly 5 steps total
-                    num_steps = 5  # Total number of steps to visualize
-                    step_indices = np.linspace(0, model.num_timesteps-1, num_steps, dtype=int)
-                    
-                    # Store points and titles for visualization
-                    points_sequence = []
-                    titles = []
-                    
-                    # Add all steps
-                    for t in reversed(range(model.num_timesteps)):
-                        t_batch = torch.full((1,), t, device=model.device, dtype=torch.long)
-                        x_t = model.p_sample(x_t, t_batch, env_grid.unsqueeze(0), guidance_scale=guidance_scale)
-                        
-                        if t in step_indices:
-                            points_sequence.append(x_t[0].cpu().numpy())
-                            titles.append(f't={t}')
-                    
-                    # Create and save denoising process visualization with true BRT
-                    denoising_save_path = os.path.join(epoch_dir, f'train_denoising_{i+1}.png')
-                    visualize_denoising_with_true(
-                        points_sequence,
-                        true_pc.cpu().numpy(),
-                        titles,
-                        denoising_save_path,
-                        dataset
-                    )
-                    if wandb_api_key:
-                        wandb.log({f'epoch_{epoch+1}/train_denoising_{i+1}': wandb.Image(denoising_save_path)})
                 
                 # Generate and plot validation samples
                 for i, (true_pc, env_grid) in enumerate(val_vis_samples):
                     # Move to device
-                    env_grid = env_grid.to(model.device)
+                    device = model.device if hasattr(model, 'device') else next(model.parameters()).device
+                    env_grid = env_grid.to(device)
                     
-                    # Generate sample
-                    generated_brt = model.sample(env_grid.unsqueeze(0), num_samples=1, guidance_scale=guidance_scale)
+                    # Generate sample (single forward pass for U-Net)
+                    generated_brt = model(env_grid.unsqueeze(0), target_state_dim=true_pc.shape[-1])
                     generated_brt = generated_brt[0].cpu().numpy()  # Remove batch dimension
                     
                     # Create comparison visualization
@@ -278,45 +269,13 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
                     visualize_comparison(
                         true_pc.cpu().numpy(),
                         generated_brt,
-                        env_grid.squeeze(0).cpu().numpy(),
-                        f'Validation Sample {i+1} Comparison',
+                        env_grid.cpu().numpy(),
+                        f'Validation Sample {i+1} Comparison (Epoch {epoch+1})',
                         comparison_save_path,
                         dataset
                     )
                     if wandb_api_key:
                         wandb.log({f'epoch_{epoch+1}/val_comparison_{i+1}': wandb.Image(comparison_save_path)})
-                    
-                    # Start from pure noise
-                    x_t = torch.randn(1, model.num_points, model.state_dim).to(model.device)
-                    
-                    # Save exactly 5 steps total
-                    num_steps = 5  # Total number of steps to visualize
-                    step_indices = np.linspace(0, model.num_timesteps-1, num_steps, dtype=int)
-                    
-                    # Store points and titles for visualization
-                    points_sequence = []
-                    titles = []
-                    
-                    # Add all steps
-                    for t in reversed(range(model.num_timesteps)):
-                        t_batch = torch.full((1,), t, device=model.device, dtype=torch.long)
-                        x_t = model.p_sample(x_t, t_batch, env_grid.unsqueeze(0), guidance_scale=guidance_scale)
-                        
-                        if t in step_indices:
-                            points_sequence.append(x_t[0].cpu().numpy())
-                            titles.append(f't={t}')
-                    
-                    # Create and save denoising process visualization with true BRT
-                    denoising_save_path = os.path.join(epoch_dir, f'val_denoising_{i+1}.png')
-                    visualize_denoising_with_true(
-                        points_sequence,
-                        true_pc.cpu().numpy(),
-                        titles,
-                        denoising_save_path,
-                        dataset
-                    )
-                    if wandb_api_key:
-                        wandb.log({f'epoch_{epoch+1}/val_denoising_{i+1}': wandb.Image(denoising_save_path)})
             
             model.train()
             print()  # Add newline for better readability
@@ -328,7 +287,7 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
         wandb.finish()
     
     # Save the trained model and visualization samples
-    final_model_path = os.path.join('models', f'brt_diffusion_model_{run_name}.pt')
+    final_model_path = os.path.join('models', f'brt_unet_baseline_{run_name}.pt')
     os.makedirs('models', exist_ok=True)
     torch.save({
         'model_state_dict': model.state_dict(),
@@ -337,23 +296,23 @@ def train_model(model, dataset, num_epochs=1000, batch_size=32, lr=1e-4, lr_min=
         'train_losses': losses,
         'val_losses': val_losses,
         'config': {
+            'model_type': 'U-Net Baseline',
             'batch_size': batch_size,
             'learning_rate': lr,
             'lr_min': lr_min,
             'lr_restart_period': lr_restart_period,
             'lr_restart_mult': lr_restart_mult,
-            'num_timesteps': model.num_timesteps,
             'num_points': model.num_points,
             'env_size': model.env_size,
-            'null_conditioning_prob': model.null_conditioning_prob,
-            'guidance_scale': guidance_scale,
-            'beta_start': beta_start,
-            'beta_end': beta_end,
+            'max_state_dim': model.max_state_dim,
+            'loss_type': 'chamfer_only',
+            'dropout_rate': getattr(model, 'dropout_rate', 0.2),
+            'weight_decay_strength': weight_decay_strength,
             'run_name': run_name
         }
     }, final_model_path)
     print(f"Model, visualization samples, and training losses saved to {final_model_path}")
-    return losses, val_losses, vis_samples, val_vis_samples  # Return both training and validation samples
+    return losses, val_losses, vis_samples, val_vis_samples
 
 
 # Example usage
@@ -368,35 +327,33 @@ if __name__ == "__main__":
         torch.cuda.manual_seed_all(args.seed)
     
     # Create dataset
-    use_3d = getattr(args, 'use_3d', False)  # Safely get the 3d flag
-    dataset = BRTDataset(args.dataset_dir, split="train", use_3d=use_3d)
+    dataset = BRTDataset(args.dataset_dir, split="train")
     
     # Get dimensions from dataset
     STATE_DIM = dataset.state_dim
     NUM_POINTS = dataset.num_points
     ENV_SIZE = dataset.env_size
     
-    # Initialize model
-    model = BRTDiffusionModel(
-        state_dim=STATE_DIM,
+    # Initialize U-Net model
+    model = BRTUNet(
         env_size=ENV_SIZE,
         num_points=NUM_POINTS,
-        num_timesteps=args.num_timesteps,
-        beta_start=args.beta_start,
-        beta_end=args.beta_end,
-        device=args.device,
-        null_conditioning_prob=args.null_conditioning_prob,
-        use_3d=use_3d
+        max_state_dim=STATE_DIM,
+        env_encoding_dim=args.env_encoding_dim,
+        dropout_rate=args.dropout_rate,
+        weight_decay_strength=args.weight_decay_strength
     ).to(args.device)
     
-    print(f"Model initialized on {args.device}")
+    # Set device attribute for convenience
+    model.device = args.device
+    
+    print(f"U-Net Model initialized on {args.device}")
     print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(f"Dataset dimensions: {NUM_POINTS} points, {STATE_DIM}D coordinates, {ENV_SIZE}x{ENV_SIZE} environment")
     print(f"Training for {args.num_epochs} epochs with batch size {args.batch_size}")
     print(f"Learning rate: {args.lr} -> {args.lr_min} (cosine annealing warm restarts, T_0={args.lr_restart_period}, T_mult={args.lr_restart_mult})")
     print(f"Sampling every {args.sample_every} epochs")
-    print(f"Classifier-free guidance: null_conditioning_prob={args.null_conditioning_prob}, guidance_scale={args.guidance_scale}")
-    print(f"3D mode: {use_3d}")
+    print(f"Regularization: dropout_rate={args.dropout_rate}, weight_decay_strength={args.weight_decay_strength}")
     
     # Train model
     losses, val_losses, vis_samples, val_vis_samples = train_model(
@@ -413,17 +370,7 @@ if __name__ == "__main__":
         wandb_api_key=args.wandb_api_key,
         wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity,
-        guidance_scale=args.guidance_scale,
-        beta_start=args.beta_start,
-        beta_end=args.beta_end
+        weight_decay_strength=args.weight_decay_strength
     )
     
-    # Save the trained model and visualization samples
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'vis_samples': vis_samples,
-        'val_vis_samples': val_vis_samples,
-        'train_losses': losses,
-        'val_losses': val_losses
-    }, 'brt_diffusion_model.pt')
-    print("Model, visualization samples, and training losses saved to brt_diffusion_model.pt")
+    print("Training completed successfully!")

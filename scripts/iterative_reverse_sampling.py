@@ -30,9 +30,9 @@ def main():
     model.eval()
 
     sample_ind = np.random.randint(0, len(dataset))
-    point_cloud, env_grid = dataset[sample_ind]
-    point_cloud = point_cloud.unsqueeze(0).to(model.device)  # Add batch dimension
-    env_grid = env_grid.unsqueeze(0).to(model.device)  # Add batch dimension
+    point_cloud, env_grid, *_ = dataset[sample_ind]  # Use wildcard to handle extra return values
+    point_cloud = point_cloud.to(model.device)
+    env_grid = env_grid.to(model.device)
 
     # Iterative reverse sampling
     reverse_process = []

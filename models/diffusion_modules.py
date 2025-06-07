@@ -131,7 +131,7 @@ class BRTDiffusionModel(nn.Module):
     """Complete diffusion model for BRT generation"""
     def __init__(self, state_dim, env_size, num_points, num_timesteps=1000,
                  beta_start=0.0001, beta_end=0.02, device='cuda', 
-                 null_conditioning_prob=0.15):
+                 null_conditioning_prob=0.15, use_3d=False):
         super().__init__()
         self.state_dim = state_dim
         self.env_size = env_size
@@ -139,6 +139,7 @@ class BRTDiffusionModel(nn.Module):
         self.num_timesteps = num_timesteps
         self.device = device
         self.null_conditioning_prob = null_conditioning_prob
+        self.use_3d = use_3d
         
         # Networks
         self.env_encoder = EnvironmentEncoder(env_size)
