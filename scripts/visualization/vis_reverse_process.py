@@ -45,7 +45,7 @@ def main():
     model.eval()
     print(f"Loaded checkpoint from {checkpoint_path}")
 
-    sample_idx = 23
+    sample_idx = 22
     point_cloud, env_grid = dataset[sample_idx]
     env_grid = env_grid.unsqueeze(0).to(model.device)  # Add batch dimension
     
@@ -63,7 +63,7 @@ def main():
     for t in tqdm(reversed(range(model.num_timesteps)), desc="Denoising"):
         with torch.no_grad():
             t_batch = torch.full((1,), t, device=model.device, dtype=torch.long)
-            x_t = model.p_sample(x_t, t_batch, env_grid, guidance_scale=1.5)
+            x_t = model.p_sample(x_t, t_batch, env_grid, guidance_scale=1.7)
 
         if t in step_indices:
             points_sequence.append(x_t[0].cpu().numpy())

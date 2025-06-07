@@ -24,10 +24,12 @@ def parse_args():
     parser.add_argument("--num_frames", type=int, default=70)
     parser.add_argument("--num_samples", type=int, default=1)
     parser.add_argument("--save_dir", type=str, default="plots/gifs/4d")
+    parser.add_argument("--no_value", action='store_true')
+    parser.add_argument('--guidance_scale', type=float, default=1.0)
     return parser.parse_args()
 
 
-def generate_denoising_gif(model, dataset, sample_idx, num_frames=50, save_dir="plots/gifs"):
+def generate_denoising_gif(model, dataset, sample_idx, num_frames=50, save_dir="plots/gifs", guidance_scale=1.0):
     """Generate a GIF showing the denoising process for a sample from the dataset."""
     # Get sample from dataset
     point_cloud, env_grid = dataset[sample_idx]
@@ -42,7 +44,7 @@ def generate_denoising_gif(model, dataset, sample_idx, num_frames=50, save_dir="
     for t in tqdm(reversed(range(model.num_timesteps)), desc="Denoising"):
         with torch.no_grad():
             t_batch = torch.full((1,), t, device=model.device, dtype=torch.long)
-            x_t = model.p_sample(x_t, t_batch, env_grid, guidance_scale=1.0)
+            x_t = model.p_sample(x_t, t_batch, env_grid, guidance_scale=guidance_scale)
         reverse_process.append(x_t.clone())
     
     # Select evenly spaced samples for the GIF
@@ -221,7 +223,7 @@ def main():
     
     # Load dataset
     dataset_dir = "../1070_4d_pointcloud_3000inside_1000outside_4cloudsperenv"  # Update this path as needed
-    dataset = BRTDataset(dataset_dir, split="val")
+    dataset = BRTDataset(dataset_dir, split="val", with_value=not args.no_value)
     
     # Create model
     model = BRTDiffusionModel(
@@ -250,7 +252,8 @@ def main():
             dataset,
             sample_idx,
             num_frames=args.num_frames,
-            save_dir=args.save_dir
+            save_dir=args.save_dir,
+            guidance_scale=args.guidance_scale
         )
 
 if __name__ == "__main__":

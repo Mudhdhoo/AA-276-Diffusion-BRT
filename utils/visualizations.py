@@ -257,7 +257,7 @@ def visualize_denoising_with_true(points_sequence, true_pc, titles, save_path=No
             cmap = create_dual_colormap()
             
             scatter = ax.scatter(x, y, theta, c=w, cmap=cmap, s=2, alpha=0.5, label='BRT Points', vmin=vmin, vmax=vmax)
-            plt.colorbar(scatter, ax=ax, label='Value Function')
+         #   plt.colorbar(scatter, ax=ax, label='Value Function')
         else:
             scatter = ax.scatter(x, y, theta, s=2, alpha=0.5, label='BRT Points')
         
@@ -270,12 +270,12 @@ def visualize_denoising_with_true(points_sequence, true_pc, titles, save_path=No
         ax.set_zlim(-np.pi, np.pi)
     
     # True BRT subplot
-    ax_true = fig.add_subplot(1, n_steps + 1, n_steps + 1, projection='3d')
-    if dataset is not None:
-        true_pc = dataset.denormalize_points(true_pc)
-    x = true_pc[:, 0]
-    y = true_pc[:, 1]
-    theta = true_pc[:, 2]
+    # ax_true = fig.add_subplot(1, n_steps + 1, n_steps + 1, projection='3d')
+    # if dataset is not None:
+    #     true_pc = dataset.denormalize_points(true_pc)
+    # x = true_pc[:, 0]
+    # y = true_pc[:, 1]
+    # theta = true_pc[:, 2]
     
     # Check if we have a 4th dimension
     if true_pc.shape[1] > 3:
@@ -289,18 +289,19 @@ def visualize_denoising_with_true(points_sequence, true_pc, titles, save_path=No
         # Create dual-scale colormap
         cmap = create_dual_colormap()
         
-        scatter_true = ax_true.scatter(x, y, theta, c=w, cmap=cmap, s=2, alpha=0.5, label='BRT Points', vmin=vmin, vmax=vmax)
-        plt.colorbar(scatter_true, ax=ax_true, label='Value Function')
+       # scatter_true = ax_true.scatter(x, y, theta, c=w, cmap=cmap, s=2, alpha=0.5, label='BRT Points', vmin=vmin, vmax=vmax)
+       # plt.colorbar(scatter_true, ax=ax_true, label='Value Function')
     else:
-        scatter_true = ax_true.scatter(x, y, theta, s=2, alpha=0.5, label='BRT Points')
+        pass
+      #  scatter_true = ax_true.scatter(x, y, theta, s=2, alpha=0.5, label='BRT Points')
     
-    ax_true.set_title('True BRT Point Cloud', fontsize=14, pad=20)
-    ax_true.set_xlabel('X Position (m)', fontsize=12)
-    ax_true.set_ylabel('Y Position (m)', fontsize=12)
-    ax_true.set_zlabel('θ (rad)', fontsize=12)
-    ax_true.set_xlim(0, 10)
-    ax_true.set_ylim(0, 10)
-    ax_true.set_zlim(-np.pi, np.pi)
+    #ax_true.set_title('True BRT Point Cloud', fontsize=14, pad=20)
+    #ax_true.set_xlabel('X Position (m)', fontsize=12)
+    #ax_true.set_ylabel('Y Position (m)', fontsize=12)
+    #ax_true.set_zlabel('θ (rad)', fontsize=12)
+    #ax_true.set_xlim(0, 10)
+    #ax_true.set_ylim(0, 10)
+    #ax_true.set_zlim(-np.pi, np.pi)
     
     plt.tight_layout()
     if save_path:

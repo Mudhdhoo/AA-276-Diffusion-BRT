@@ -188,8 +188,8 @@ def main():
     args = parse_args()
     
     # Load dataset
-    dataset_dir = "point_cloud_dataset_4000"  # Update this path as needed
-    dataset = BRTDataset(dataset_dir, split="val")
+    dataset_dir = "../1070_4d_pointcloud_3000inside_1000outside_4cloudsperenv"  # Update this path as needed
+    dataset = BRTDataset(dataset_dir, split="val", with_value=False)
     
     # Create model
     model = BRTDiffusionModel(

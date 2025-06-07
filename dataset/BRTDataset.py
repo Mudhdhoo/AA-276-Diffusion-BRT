@@ -7,7 +7,7 @@ from stats.train_stats import MEAN, STD
 
 class BRTDataset(Dataset):
     """Dataset for BRT point clouds and environments"""
-    def __init__(self, dataset_dir, split="train"):
+    def __init__(self, dataset_dir, with_value=True, split="train"):
         """
         Args:
             dataset_dir: Directory containing the dataset
@@ -15,7 +15,7 @@ class BRTDataset(Dataset):
         """
         self.dataset_dir = dataset_dir
         self.split = split
-        
+        self.with_value = with_value
         # Get all sample directories
         self.sample_dirs = sorted([d for d in os.listdir(dataset_dir) if d.startswith('sample_')])
         
@@ -157,5 +157,8 @@ class BRTDataset(Dataset):
 
         point_cloud = torch.FloatTensor(point_cloud)
         env_grid = torch.FloatTensor(env_grid)
+
+        if not self.with_value:
+            point_cloud = point_cloud[:, :3]
         
         return point_cloud, env_grid
