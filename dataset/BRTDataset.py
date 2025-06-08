@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from loguru import logger
-from stats.train_stats import MEAN, STD
+from stats.train_stats import MEAN_1070, STD_1070, MEAN_5000_INSIDE, STD_5000_INSIDE
 
 class BRTDataset(Dataset):
     """Dataset for BRT point clouds and environments"""
@@ -69,8 +69,13 @@ class BRTDataset(Dataset):
         self.compute_min_max_stats()
         
         # Train set mean and std
-        self.points_mean = np.array(MEAN)
-        self.points_std = np.array(STD)
+        if dataset_dir.startswith('5000'):
+            self.points_mean = np.array(MEAN_5000_INSIDE)
+            self.points_std = np.array(STD_5000_INSIDE)
+        elif dataset_dir.startswith('1070'):
+            self.points_mean = np.array(MEAN_1070)
+            self.points_std = np.array(STD_1070)
+            
         logger.info(f"Mean: {self.points_mean}")
         logger.info(f"Std: {self.points_std}")
 
