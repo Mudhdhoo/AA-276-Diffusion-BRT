@@ -250,7 +250,7 @@ class SimpleModelEvaluator:
         return all_squared_errors
     
     def save_visualizations(self, predicted_points, target_points, env_batch, 
-                           value_functions, model_info, dataset, l2_error=None, output_dir="./visualizations"):
+                           value_functions, model_info, dataset, l2_error=None, output_dir="./visualizations", artifact_name=None):
         """Save visualization plots and log to wandb"""
         if self.vis_sample_count >= self.max_vis_samples:
             return
@@ -264,19 +264,20 @@ class SimpleModelEvaluator:
         value_func_sample = value_functions[0].cpu().numpy() if value_functions is not None else None
         
         model_name = f"{model_info['type']}_{model_info['state_dim']}D"
+        artifact_title = f" - {artifact_name}" if artifact_name else ""
         
         # Create comparison visualization
-        save_path = os.path.join(output_dir, f"{model_name}_sample_{self.vis_sample_count+1:03d}_comparison.png")
+        save_path = os.path.join(output_dir, f"{model_name}_{artifact_name}_sample_{self.vis_sample_count+1:03d}_comparison.png")
         visualize_comparison(
             target_sample, pred_sample, env_sample,
-            title=f"{model_name} - Test Split - Sample {self.vis_sample_count+1} Comparison",
+            title=f"{model_name}{artifact_title} - Test Split - Sample {self.vis_sample_count+1} Comparison",
             save_path=save_path,
             dataset=dataset
         )
         
         # Create detailed visualization with L2 error info
-        detailed_save_path = os.path.join(output_dir, f"{model_name}_sample_{self.vis_sample_count+1:03d}_detailed.png")
-        detailed_title = f"{model_name} - Test Split - Sample {self.vis_sample_count+1}"
+        detailed_save_path = os.path.join(output_dir, f"{model_name}_{artifact_name}_sample_{self.vis_sample_count+1:03d}_detailed.png")
+        detailed_title = f"{model_name}{artifact_title} - Test Split - Sample {self.vis_sample_count+1}"
         if l2_error is not None:
             detailed_title += f" (L2: {l2_error:.6f})"
         
@@ -287,18 +288,18 @@ class SimpleModelEvaluator:
             dataset=dataset
         )
         
-        # Log to wandb
+        # Log to wandb with artifact name in the key
         wandb.log({
-            f"visualizations/comparison_{self.vis_sample_count+1}": wandb.Image(save_path),
-            f"visualizations/detailed_{self.vis_sample_count+1}": wandb.Image(detailed_save_path),
-            f"visualizations/sample_idx": self.vis_sample_count+1,
-            f"visualizations/l2_error": l2_error if l2_error is not None else 0.0
+            f"visualizations/{artifact_name}/comparison_{self.vis_sample_count+1}": wandb.Image(save_path),
+            f"visualizations/{artifact_name}/detailed_{self.vis_sample_count+1}": wandb.Image(detailed_save_path),
+            f"visualizations/{artifact_name}/sample_idx": self.vis_sample_count+1,
+            f"visualizations/{artifact_name}/l2_error": l2_error if l2_error is not None else 0.0
         })
         
         self.vis_sample_count += 1
         print(f"Saved visualization {self.vis_sample_count}/{self.max_vis_samples}: {save_path}")
     
-    def evaluate_model(self, model, model_info, test_loader, dataset, output_dir):
+    def evaluate_model(self, model, model_info, test_loader, dataset, output_dir, artifact_name=None):
         """Evaluate model and return MSE statistics"""
         print(f"Evaluating {model_info['type']} model with {model_info['state_dim']}D output")
         
@@ -344,7 +345,8 @@ class SimpleModelEvaluator:
             predicted_points, target_points, env_batch, value_functions, sample_l2 = sample_data
             self.save_visualizations(
                 predicted_points, target_points, env_batch, 
-                value_functions, model_info, dataset, sample_l2, output_dir
+                value_functions, model_info, dataset, sample_l2, output_dir,
+                artifact_name=artifact_name
             )
         
         # Compute final statistics
@@ -364,17 +366,18 @@ class SimpleModelEvaluator:
             'std_squared_error': float(std_squared_error),
             'total_points': len(all_squared_errors),
             'rmse': float(rmse),
-            'config': model_info['config']
+            'config': model_info['config'],
+            'artifact_name': artifact_name
         }
         
         # Log final results to wandb
         wandb.log({
-            "results/mean_squared_error": mean_squared_error,
-            "results/std_squared_error": std_squared_error,
-            "results/rmse": rmse,
-            "results/total_points": len(all_squared_errors),
-            "results/model_type": model_info['type'],
-            "results/state_dim": model_info['state_dim']
+            f"results/{artifact_name}/mean_squared_error": mean_squared_error,
+            f"results/{artifact_name}/std_squared_error": std_squared_error,
+            f"results/{artifact_name}/rmse": rmse,
+            f"results/{artifact_name}/total_points": len(all_squared_errors),
+            f"results/{artifact_name}/model_type": model_info['type'],
+            f"results/{artifact_name}/state_dim": model_info['state_dim']
         })
         
         return results
@@ -471,7 +474,7 @@ def main():
             evaluator.vis_sample_count = 0
             
             # Evaluate
-            results = evaluator.evaluate_model(model, model_info, data_loader, dataset, model_output_dir)
+            results = evaluator.evaluate_model(model, model_info, data_loader, dataset, model_output_dir, artifact_name=model_config['name'])
             
             if results:
                 results['model_name'] = model_config['name']
