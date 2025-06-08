@@ -69,11 +69,11 @@ class BRTDataset(Dataset):
         self.compute_min_max_stats()
         
         # Train set mean and std
-        if dataset_dir.contains('5000'):
+        if '5000' in dataset_dir:
             self.points_mean = np.array(MEAN_5000_INSIDE)
             self.points_std = np.array(STD_5000_INSIDE)
             logger.info("Using 5000 inside stats")
-        elif dataset_dir.contains('1070'):
+        elif '1070' in dataset_dir:
             self.points_mean = np.array(MEAN_1070)
             self.points_std = np.array(STD_1070)
             logger.info("Using 1070 stats")
