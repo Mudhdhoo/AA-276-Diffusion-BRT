@@ -58,7 +58,7 @@ class EnvironmentEncoder(nn.Module):
 
 class PointDiffusionNetwork(nn.Module):
     """Network for denoising individual points with conditioning"""
-    def __init__(self, state_dim, time_dim=128, env_dim=128, hidden_dim=256):
+    def __init__(self, state_dim, time_dim=128, env_dim=128, hidden_dim=256, dropout_rate=0.1):
         super().__init__()
         self.state_dim = state_dim
         
@@ -78,6 +78,7 @@ class PointDiffusionNetwork(nn.Module):
             nn.Sequential(
                 nn.Linear(hidden_dim + time_dim + env_dim, hidden_dim),
                 nn.ReLU(),
+                nn.Dropout(dropout_rate),
                 nn.Linear(hidden_dim, hidden_dim),
                 nn.ReLU()
             ) for _ in range(4)
