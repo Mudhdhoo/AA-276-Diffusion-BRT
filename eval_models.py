@@ -27,25 +27,25 @@ from utils.visualizations import visualize_comparison, visualize_detailed_value_
 
 # Default artifacts and their corresponding datasets
 DEFAULT_ARTIFACTS = [
-    {
-        'name': 'diffusion_lucky_moon_21',
-        'path': 'malteny-stanford/brt-diffusion/model-checkpoint-lucky-moon-21-epoch-1500:v0',
-        'dataset': '~/1070_4d_pointcloud_3000inside_1000outside_4cloudsperenv',
-        'checkpoint_file': 'checkpoint_epoch_1500.pt'
-    },
-    {
-        'name': 'unet_deep_wave_6', 
-        'path': 'malteny-stanford/brt-unet-baseline/unet-checkpoint-deep-wave-6-epoch-100:v0',
-        'dataset': '~/1070_4d_pointcloud_3000inside_1000outside_4cloudsperenv',
-        'checkpoint_file': 'checkpoint_epoch_100.pt'
-    },
-    {
-        'name': 'diffusion_comfy_dew_36',
-        'path': 'malteny-stanford/brt-diffusion/model-checkpoint-comfy-dew-36-epoch-1300:v0', 
-        'dataset': '~/5000_1000_newest',
-        'checkpoint_file': 'checkpoint_epoch_1300.pt'
+    # {
+    #     'name': 'diffusion_lucky_moon_21',
+    #     'path': 'malteny-stanford/brt-diffusion/model-checkpoint-lucky-moon-21-epoch-1500:v0',
+    #     'dataset': '~/1070_4d_pointcloud_3000inside_1000outside_4cloudsperenv',
+    #     'checkpoint_file': 'checkpoint_epoch_1500.pt'
+    # },
+    # {
+    #     'name': 'unet_deep_wave_6', 
+    #     'path': 'malteny-stanford/brt-unet-baseline/unet-checkpoint-deep-wave-6-epoch-100:v0',
+    #     'dataset': '~/1070_4d_pointcloud_3000inside_1000outside_4cloudsperenv',
+    #     'checkpoint_file': 'checkpoint_epoch_100.pt'
+    # },
+    # {
+    #     'name': 'diffusion_comfy_dew_36',
+    #     'path': 'malteny-stanford/brt-diffusion/model-checkpoint-comfy-dew-36-epoch-1300:v0', 
+    #     'dataset': '~/5000_1000_newest',
+    #     'checkpoint_file': 'checkpoint_epoch_1300.pt'
         
-    },
+    # },
     {
         'name': 'diffusion_hearty_sea_37',
         'path': 'malteny-stanford/brt-diffusion/model-checkpoint-hearty-sea-37-epoch-800:v0',
