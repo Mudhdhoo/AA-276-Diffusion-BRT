@@ -44,6 +44,13 @@ DEFAULT_ARTIFACTS = [
         'path': 'malteny-stanford/brt-diffusion/model-checkpoint-comfy-dew-36-epoch-1300:v0', 
         'dataset': '~/5000_1000_newest',
         'checkpoint_file': 'checkpoint_epoch_1300.pt'
+        
+    },
+    {
+        'name': 'diffusion_hearty_sea_37',
+        'path': 'malteny-stanford/brt-diffusion/model-checkpoint-hearty-sea-37-epoch-800:v0',
+        'dataset': '~/5000_1000_newest',
+        'checkpoint_file': 'checkpoint_epoch_800.pt'
     }
 ]
 
