@@ -212,7 +212,8 @@ class SimpleModelEvaluator:
         return x_t
     
     def compute_all_point_errors(self, pred_points, value_functions, dataset):
-        """Compute squared errors for ALL points across all batches"""
+        """Compute errors for ALL points across all batches"""
+        all_errors = []
         all_squared_errors = []
         batch_size = pred_points.shape[0]
         
@@ -245,16 +246,17 @@ class SimpleModelEvaluator:
                     fill_value=1.0
                 )
                 
-                # Compute squared errors for all points
+                # Compute errors and squared errors for all points
                 errors = pred_values - interpolated_values
                 squared_errors = errors ** 2
+                all_errors.extend(errors.tolist())
                 all_squared_errors.extend(squared_errors.tolist())
                 
             except Exception as e:
                 print(f"Warning: Error interpolating batch {b}: {e}")
                 continue
         
-        return all_squared_errors
+        return all_errors, all_squared_errors
     
     def save_visualizations(self, predicted_points, target_points, env_batch, 
                            value_functions, model_info, dataset, l2_error=None, output_dir="./visualizations", artifact_name=None):
@@ -310,6 +312,7 @@ class SimpleModelEvaluator:
         """Evaluate model and return MSE statistics"""
         print(f"Evaluating {model_info['type']} model with {model_info['state_dim']}D output")
         
+        all_errors = []
         all_squared_errors = []
         vis_samples = []
         
@@ -324,26 +327,27 @@ class SimpleModelEvaluator:
             # Generate predictions
             predicted_points = self.generate_samples(model, model_info, env_batch)
             
-            # Compute squared errors for all points in this batch
-            batch_squared_errors = self.compute_all_point_errors(
+            # Compute errors for all points in this batch
+            batch_errors, batch_squared_errors = self.compute_all_point_errors(
                 predicted_points, value_functions, dataset
             )
+            all_errors.extend(batch_errors)
             all_squared_errors.extend(batch_squared_errors)
             
             # Store samples for visualization
             if len(vis_samples) < self.max_vis_samples:
                 # Compute sample-specific L2 error for first sample in batch
-                sample_errors = self.compute_all_point_errors(
+                sample_errors, _ = self.compute_all_point_errors(
                     predicted_points[:1], value_functions[:1], dataset
                 )
-                sample_l2 = np.mean(sample_errors) if sample_errors else None
+                sample_l2 = np.mean(np.array(sample_errors) ** 2) if sample_errors else None
                 vis_samples.append((predicted_points, target_points, env_batch, value_functions, sample_l2))
             
             # Log batch progress to wandb
             if batch_idx % 10 == 0:
                 wandb.log({
                     "evaluation/batch_idx": batch_idx,
-                    "evaluation/points_processed": len(all_squared_errors)
+                    "evaluation/points_processed": len(all_errors)
                 })
         
         # Generate visualizations
@@ -357,21 +361,23 @@ class SimpleModelEvaluator:
             )
         
         # Compute final statistics
-        if not all_squared_errors:
-            print("No valid squared errors computed")
+        if not all_errors:
+            print("No valid errors computed")
             return None
         
+        all_errors = np.array(all_errors)
         all_squared_errors = np.array(all_squared_errors)
+        
         mean_squared_error = np.mean(all_squared_errors)
-        std_squared_error = np.std(all_squared_errors)
+        std_error = np.std(all_errors)  # Standard deviation of raw errors
         rmse = np.sqrt(mean_squared_error)
         
         results = {
             'model_type': model_info['type'],
             'state_dim': model_info['state_dim'],
             'mean_squared_error': float(mean_squared_error),
-            'std_squared_error': float(std_squared_error),
-            'total_points': len(all_squared_errors),
+            'std_error': float(std_error),  # Now tracking std of raw errors
+            'total_points': len(all_errors),
             'rmse': float(rmse),
             'config': model_info['config'],
             'artifact_name': artifact_name
@@ -380,9 +386,9 @@ class SimpleModelEvaluator:
         # Log final results to wandb
         wandb.log({
             f"results/{artifact_name}/mean_squared_error": mean_squared_error,
-            f"results/{artifact_name}/std_squared_error": std_squared_error,
+            f"results/{artifact_name}/std_error": std_error,  # Now tracking std of raw errors
             f"results/{artifact_name}/rmse": rmse,
-            f"results/{artifact_name}/total_points": len(all_squared_errors),
+            f"results/{artifact_name}/total_points": len(all_errors),
             f"results/{artifact_name}/model_type": model_info['type'],
             f"results/{artifact_name}/state_dim": model_info['state_dim']
         })
@@ -495,7 +501,7 @@ def main():
                 print(f"  State Dimension: {results['state_dim']}")
                 print(f"  Total Points: {results['total_points']:,}")
                 print(f"  Mean Squared Error: {results['mean_squared_error']:.8f}")
-                print(f"  Std of Squared Errors: {results['std_squared_error']:.8f}")
+                print(f"  Std of Errors: {results['std_error']:.8f}")
                 print(f"  RMSE: {results['rmse']:.8f}")
                 
                 all_results.append(results)
@@ -520,14 +526,14 @@ def main():
                 result['model_type'],
                 result['state_dim'],
                 result['mean_squared_error'],
-                result['std_squared_error'],
+                result['std_error'],
                 result['rmse'],
                 result['total_points']
             ])
         
         comparison_table = wandb.Table(
             data=comparison_data,
-            columns=["Model Name", "Type", "State Dim", "MSE", "Std Squared Error", "RMSE", "Total Points"]
+            columns=["Model Name", "Type", "State Dim", "MSE", "Std Error", "RMSE", "Total Points"]
         )
         wandb.log({"evaluation_comparison": comparison_table})
         
@@ -551,7 +557,7 @@ def main():
     
     for result in all_results:
         print(f"\n{result['model_name']} ({result['model_type']}, {result['state_dim']}D):")
-        print(f"  MSE: {result['mean_squared_error']:.8f} ± {result['std_squared_error']:.8f}")
+        print(f"  MSE: {result['mean_squared_error']:.8f} ± {result['std_error']:.8f}")
         print(f"  RMSE: {result['rmse']:.8f}")
         print(f"  Points: {result['total_points']:,}")
 
