@@ -78,7 +78,7 @@ class PointDiffusionNetwork(nn.Module):
             nn.Sequential(
                 nn.Linear(hidden_dim + time_dim + env_dim, hidden_dim),
                 nn.ReLU(),
-                nn.Dropout(dropout_rate),
+               # nn.Dropout(dropout_rate),
                 nn.Linear(hidden_dim, hidden_dim),
                 nn.ReLU()
             ) for _ in range(4)
